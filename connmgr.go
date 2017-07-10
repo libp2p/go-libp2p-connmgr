@@ -6,9 +6,10 @@ import (
 	"sync"
 	"time"
 
-	inet "gx/ipfs/QmRscs8KxrSmSv4iuevHv8JfuUzHBMoqiaHzxfDRiksd6e/go-libp2p-net"
-	logging "gx/ipfs/QmSpJByNKFX1sCsHBEp3R73FL4NF6FnQTEGyNAXHm2GS52/go-log"
-	ma "gx/ipfs/QmcyqRMCAXVtYPS4DiBrA7sezL9rRGfW8Ctx7cywL4TXJj/go-multiaddr"
+	logging "github.com/ipfs/go-log"
+	inet "github.com/libp2p/go-libp2p-net"
+	peer "github.com/libp2p/go-libp2p-peer"
+	ma "github.com/multiformats/go-multiaddr"
 )
 
 var log = logging.Logger("connmgr")
@@ -19,9 +20,12 @@ type ConnManager struct {
 
 	GracePeriod time.Duration
 
-	conns map[inet.Conn]connInfo
+	peers     map[peer.ID]peerInfo
+	connCount int
 
 	lk sync.Mutex
+
+	lastTrim time.Time
 }
 
 func NewConnManager(low, hi int) *ConnManager {
@@ -29,43 +33,37 @@ func NewConnManager(low, hi int) *ConnManager {
 		HighWater:   hi,
 		LowWater:    low,
 		GracePeriod: time.Second * 10,
-		conns:       make(map[inet.Conn]connInfo),
+		peers:       make(map[peer.ID]peerInfo),
 	}
 }
 
-type connInfo struct {
-	tags   map[string]int
-	value  int
-	c      inet.Conn
-	closed bool
+type peerInfo struct {
+	tags  map[string]int
+	value int
+
+	conns map[inet.Conn]time.Time
 
 	firstSeen time.Time
 }
 
 func (cm *ConnManager) TrimOpenConns(ctx context.Context) {
-	defer log.EventBegin(ctx, "connCleanup").Done()
 	cm.lk.Lock()
 	defer cm.lk.Unlock()
+	defer log.EventBegin(ctx, "connCleanup").Done()
+	cm.lastTrim = time.Now()
 
-	if len(cm.conns) < cm.LowWater {
+	if len(cm.peers) < cm.LowWater {
 		log.Info("open connection count below limit")
 		return
 	}
 
-	var infos []connInfo
+	var infos []peerInfo
 
-	for _, inf := range cm.conns {
+	for _, inf := range cm.peers {
 		infos = append(infos, inf)
 	}
 
 	sort.Slice(infos, func(i, j int) bool {
-		if infos[i].closed {
-			return true
-		}
-		if infos[j].closed {
-			return false
-		}
-
 		return infos[i].value < infos[j].value
 	})
 
@@ -76,43 +74,45 @@ func (cm *ConnManager) TrimOpenConns(ctx context.Context) {
 			continue
 		}
 
-		log.Info("closing conn: ", inf.c.RemotePeer())
-		log.Event(ctx, "closeConn", inf.c.RemotePeer())
-		inf.c.Close()
-		inf.closed = true
+		// TODO: if a peer has more than one connection, maybe only close one?
+		for c, _ := range inf.conns {
+			log.Info("closing conn: ", c.RemotePeer())
+			log.Event(ctx, "closeConn", c.RemotePeer())
+			c.Close()
+		}
 	}
 
-	if len(cm.conns) > cm.HighWater {
+	if len(cm.peers) > cm.HighWater {
 		log.Error("still over high water mark after trimming connections")
 	}
 }
 
-func (cm *ConnManager) TagConn(c inet.Conn, tag string, val int) {
+func (cm *ConnManager) TagConn(p peer.ID, tag string, val int) {
 	cm.lk.Lock()
 	defer cm.lk.Unlock()
 
-	ci, ok := cm.conns[c]
+	pi, ok := cm.peers[p]
 	if !ok {
-		log.Error("tried to tag untracked conn: ", c.RemotePeer())
+		log.Error("tried to tag conn from untracked peer: ", p)
 		return
 	}
 
-	ci.value += (val - ci.tags[tag])
-	ci.tags[tag] = val
+	pi.value += (val - pi.tags[tag])
+	pi.tags[tag] = val
 }
 
-func (cm *ConnManager) UntagConn(c inet.Conn, tag string) {
+func (cm *ConnManager) UntagConn(p peer.ID, tag string) {
 	cm.lk.Lock()
 	defer cm.lk.Unlock()
 
-	ci, ok := cm.conns[c]
+	pi, ok := cm.peers[p]
 	if !ok {
-		log.Error("tried to remove tag on untracked conn: ", c.RemotePeer())
+		log.Error("tried to remove tag from untracked peer: ", p)
 		return
 	}
 
-	ci.value -= ci.tags[tag]
-	delete(ci.tags, tag)
+	pi.value -= pi.tags[tag]
+	delete(pi.tags, tag)
 }
 
 func (cm *ConnManager) Notifee() *cmNotifee {
@@ -131,21 +131,29 @@ func (nn *cmNotifee) Connected(n inet.Network, c inet.Conn) {
 	cm.lk.Lock()
 	defer cm.lk.Unlock()
 
-	cinfo, ok := cm.conns[c]
+	pinfo, ok := cm.peers[c.RemotePeer()]
+	if !ok {
+		pinfo = peerInfo{
+			firstSeen: time.Now(),
+			tags:      make(map[string]int),
+			conns:     make(map[inet.Conn]time.Time),
+		}
+		cm.peers[c.RemotePeer()] = pinfo
+	}
+
+	_, ok = pinfo.conns[c]
 	if ok {
 		log.Error("received connected notification for conn we are already tracking: ", c.RemotePeer())
 		return
 	}
 
-	cinfo = connInfo{
-		firstSeen: time.Now(),
-		tags:      make(map[string]int),
-		c:         c,
-	}
-	cm.conns[c] = cinfo
+	pinfo.conns[c] = time.Now()
+	cm.connCount++
 
-	if len(cm.conns) > nn.HighWater {
-		go cm.TrimOpenConns(context.Background())
+	if cm.connCount > nn.HighWater {
+		if cm.lastTrim.IsZero() || time.Since(cm.lastTrim) > time.Second*10 {
+			go cm.TrimOpenConns(context.Background())
+		}
 	}
 }
 
@@ -155,13 +163,23 @@ func (nn *cmNotifee) Disconnected(n inet.Network, c inet.Conn) {
 	cm.lk.Lock()
 	defer cm.lk.Unlock()
 
-	_, ok := cm.conns[c]
+	cinf, ok := cm.peers[c.RemotePeer()]
+	if !ok {
+		log.Error("received disconnected notification for peer we are not tracking: ", c.RemotePeer())
+		return
+	}
+
+	_, ok = cinf.conns[c]
 	if !ok {
 		log.Error("received disconnected notification for conn we are not tracking: ", c.RemotePeer())
 		return
 	}
 
-	delete(cm.conns, c)
+	delete(cinf.conns, c)
+	cm.connCount--
+	if len(cinf.conns) == 0 {
+		delete(cm.peers, c.RemotePeer())
+	}
 }
 
 func (nn *cmNotifee) Listen(n inet.Network, addr ma.Multiaddr)      {}
