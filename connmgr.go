@@ -17,6 +17,7 @@ var log = logging.Logger("connmgr")
 type ConnManager interface {
 	TagPeer(peer.ID, string, int)
 	UntagPeer(peer.ID, string)
+	GetTagInfo(peer.ID) *TagInfo
 	TrimOpenConns(context.Context)
 	Notifee() inet.Notifiee
 }
@@ -55,10 +56,21 @@ type peerInfo struct {
 	firstSeen time.Time
 }
 
+type TagInfo struct {
+	FirstSeen time.Time
+	Value     int
+	Tags      map[string]int
+	Conns     map[string]time.Time
+}
+
 func (cm *connManager) TrimOpenConns(ctx context.Context) {
 	cm.lk.Lock()
 	defer cm.lk.Unlock()
 	defer log.EventBegin(ctx, "connCleanup").Done()
+	if cm.lowWater == 0 || cm.highWater == 0 {
+		// disabled
+		return
+	}
 	cm.lastTrim = time.Now()
 
 	if len(cm.peers) < cm.lowWater {
@@ -95,6 +107,32 @@ func (cm *connManager) TrimOpenConns(ctx context.Context) {
 	if len(cm.peers) > cm.highWater {
 		log.Error("still over high water mark after trimming connections")
 	}
+}
+
+func (cm *connManager) GetTagInfo(p peer.ID) *TagInfo {
+	cm.lk.Lock()
+	defer cm.lk.Unlock()
+
+	pi, ok := cm.peers[p]
+	if !ok {
+		return nil
+	}
+
+	out := &TagInfo{
+		FirstSeen: pi.firstSeen,
+		Value:     pi.value,
+		Tags:      make(map[string]int),
+		Conns:     make(map[string]time.Time),
+	}
+
+	for t, v := range pi.tags {
+		out.Tags[t] = v
+	}
+	for c, t := range pi.conns {
+		out.Conns[c.RemoteMultiaddr().String()] = t
+	}
+
+	return out
 }
 
 func (cm *connManager) TagPeer(p peer.ID, tag string, val int) {
