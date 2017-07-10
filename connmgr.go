@@ -14,13 +14,20 @@ import (
 
 var log = logging.Logger("connmgr")
 
-type ConnManager struct {
-	HighWater int
-	LowWater  int
+type ConnManager interface {
+	TagPeer(peer.ID, string, int)
+	UntagPeer(peer.ID, string)
+	TrimOpenConns(context.Context)
+	Notifee() inet.Notifiee
+}
 
-	GracePeriod time.Duration
+type connManager struct {
+	highWater int
+	lowWater  int
 
-	peers     map[peer.ID]peerInfo
+	gracePeriod time.Duration
+
+	peers     map[peer.ID]*peerInfo
 	connCount int
 
 	lk sync.Mutex
@@ -28,12 +35,14 @@ type ConnManager struct {
 	lastTrim time.Time
 }
 
-func NewConnManager(low, hi int) *ConnManager {
-	return &ConnManager{
-		HighWater:   hi,
-		LowWater:    low,
-		GracePeriod: time.Second * 10,
-		peers:       make(map[peer.ID]peerInfo),
+var DefaultGracePeriod = time.Second * 10
+
+func NewConnManager(low, hi int, grace time.Duration) ConnManager {
+	return &connManager{
+		highWater:   hi,
+		lowWater:    low,
+		gracePeriod: grace,
+		peers:       make(map[peer.ID]*peerInfo),
 	}
 }
 
@@ -46,18 +55,18 @@ type peerInfo struct {
 	firstSeen time.Time
 }
 
-func (cm *ConnManager) TrimOpenConns(ctx context.Context) {
+func (cm *connManager) TrimOpenConns(ctx context.Context) {
 	cm.lk.Lock()
 	defer cm.lk.Unlock()
 	defer log.EventBegin(ctx, "connCleanup").Done()
 	cm.lastTrim = time.Now()
 
-	if len(cm.peers) < cm.LowWater {
+	if len(cm.peers) < cm.lowWater {
 		log.Info("open connection count below limit")
 		return
 	}
 
-	var infos []peerInfo
+	var infos []*peerInfo
 
 	for _, inf := range cm.peers {
 		infos = append(infos, inf)
@@ -67,10 +76,11 @@ func (cm *ConnManager) TrimOpenConns(ctx context.Context) {
 		return infos[i].value < infos[j].value
 	})
 
-	toclose := infos[:len(infos)-cm.LowWater]
+	close_count := len(infos) - cm.lowWater
+	toclose := infos[:close_count]
 
 	for _, inf := range toclose {
-		if time.Since(inf.firstSeen) < cm.GracePeriod {
+		if time.Since(inf.firstSeen) < cm.gracePeriod {
 			continue
 		}
 
@@ -82,12 +92,12 @@ func (cm *ConnManager) TrimOpenConns(ctx context.Context) {
 		}
 	}
 
-	if len(cm.peers) > cm.HighWater {
+	if len(cm.peers) > cm.highWater {
 		log.Error("still over high water mark after trimming connections")
 	}
 }
 
-func (cm *ConnManager) TagConn(p peer.ID, tag string, val int) {
+func (cm *connManager) TagPeer(p peer.ID, tag string, val int) {
 	cm.lk.Lock()
 	defer cm.lk.Unlock()
 
@@ -101,7 +111,7 @@ func (cm *ConnManager) TagConn(p peer.ID, tag string, val int) {
 	pi.tags[tag] = val
 }
 
-func (cm *ConnManager) UntagConn(p peer.ID, tag string) {
+func (cm *connManager) UntagPeer(p peer.ID, tag string) {
 	cm.lk.Lock()
 	defer cm.lk.Unlock()
 
@@ -115,14 +125,14 @@ func (cm *ConnManager) UntagConn(p peer.ID, tag string) {
 	delete(pi.tags, tag)
 }
 
-func (cm *ConnManager) Notifee() *cmNotifee {
+func (cm *connManager) Notifee() inet.Notifiee {
 	return (*cmNotifee)(cm)
 }
 
-type cmNotifee ConnManager
+type cmNotifee connManager
 
-func (nn *cmNotifee) cm() *ConnManager {
-	return (*ConnManager)(nn)
+func (nn *cmNotifee) cm() *connManager {
+	return (*connManager)(nn)
 }
 
 func (nn *cmNotifee) Connected(n inet.Network, c inet.Conn) {
@@ -133,7 +143,7 @@ func (nn *cmNotifee) Connected(n inet.Network, c inet.Conn) {
 
 	pinfo, ok := cm.peers[c.RemotePeer()]
 	if !ok {
-		pinfo = peerInfo{
+		pinfo = &peerInfo{
 			firstSeen: time.Now(),
 			tags:      make(map[string]int),
 			conns:     make(map[inet.Conn]time.Time),
@@ -150,7 +160,7 @@ func (nn *cmNotifee) Connected(n inet.Network, c inet.Conn) {
 	pinfo.conns[c] = time.Now()
 	cm.connCount++
 
-	if cm.connCount > nn.HighWater {
+	if cm.connCount > nn.highWater {
 		if cm.lastTrim.IsZero() || time.Since(cm.lastTrim) > time.Second*10 {
 			go cm.TrimOpenConns(context.Background())
 		}
