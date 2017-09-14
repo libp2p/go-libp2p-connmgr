@@ -2,6 +2,7 @@ package connmgr
 
 import (
 	"context"
+	"io"
 	"sort"
 	"sync"
 	"time"
@@ -64,18 +65,24 @@ type TagInfo struct {
 }
 
 func (cm *connManager) TrimOpenConns(ctx context.Context) {
+	for _, c := range cm.getConnsToClose(ctx) {
+		c.Close()
+	}
+}
+
+func (cm *connManager) getConnsToClose(ctx context.Context) []io.Closer {
 	cm.lk.Lock()
 	defer cm.lk.Unlock()
 	defer log.EventBegin(ctx, "connCleanup").Done()
 	if cm.lowWater == 0 || cm.highWater == 0 {
 		// disabled
-		return
+		return nil
 	}
 	cm.lastTrim = time.Now()
 
 	if len(cm.peers) < cm.lowWater {
 		log.Info("open connection count below limit")
-		return
+		return nil
 	}
 
 	var infos []*peerInfo
@@ -91,6 +98,8 @@ func (cm *connManager) TrimOpenConns(ctx context.Context) {
 	close_count := len(infos) - cm.lowWater
 	toclose := infos[:close_count]
 
+	var closed []io.Closer
+
 	for _, inf := range toclose {
 		if time.Since(inf.firstSeen) < cm.gracePeriod {
 			continue
@@ -100,13 +109,12 @@ func (cm *connManager) TrimOpenConns(ctx context.Context) {
 		for c, _ := range inf.conns {
 			log.Info("closing conn: ", c.RemotePeer())
 			log.Event(ctx, "closeConn", c.RemotePeer())
-			c.Close()
+			// TODO: probably don't want to always do this in a goroutine
+			closed = append(closed, c)
 		}
 	}
 
-	if len(cm.peers) > cm.highWater {
-		log.Error("still over high water mark after trimming connections")
-	}
+	return closed
 }
 
 func (cm *connManager) GetTagInfo(p peer.ID) *TagInfo {
