@@ -8,20 +8,13 @@ import (
 	"time"
 
 	logging "github.com/ipfs/go-log"
+	ifconnmgr "github.com/libp2p/go-libp2p-interface-connmgr"
 	inet "github.com/libp2p/go-libp2p-net"
 	peer "github.com/libp2p/go-libp2p-peer"
 	ma "github.com/multiformats/go-multiaddr"
 )
 
 var log = logging.Logger("connmgr")
-
-type ConnManager interface {
-	TagPeer(peer.ID, string, int)
-	UntagPeer(peer.ID, string)
-	GetTagInfo(peer.ID) *TagInfo
-	TrimOpenConns(context.Context)
-	Notifee() inet.Notifiee
-}
 
 type connManager struct {
 	highWater int
@@ -37,9 +30,11 @@ type connManager struct {
 	lastTrim time.Time
 }
 
+var _ ifconnmgr.ConnManager = (*connManager)(nil)
+
 var DefaultGracePeriod = time.Second * 10
 
-func NewConnManager(low, hi int, grace time.Duration) ConnManager {
+func NewConnManager(low, hi int, grace time.Duration) ifconnmgr.ConnManager {
 	return &connManager{
 		highWater:   hi,
 		lowWater:    low,
@@ -55,13 +50,6 @@ type peerInfo struct {
 	conns map[inet.Conn]time.Time
 
 	firstSeen time.Time
-}
-
-type TagInfo struct {
-	FirstSeen time.Time
-	Value     int
-	Tags      map[string]int
-	Conns     map[string]time.Time
 }
 
 func (cm *connManager) TrimOpenConns(ctx context.Context) {
@@ -117,7 +105,7 @@ func (cm *connManager) getConnsToClose(ctx context.Context) []io.Closer {
 	return closed
 }
 
-func (cm *connManager) GetTagInfo(p peer.ID) *TagInfo {
+func (cm *connManager) GetTagInfo(p peer.ID) *ifconnmgr.TagInfo {
 	cm.lk.Lock()
 	defer cm.lk.Unlock()
 
@@ -126,7 +114,7 @@ func (cm *connManager) GetTagInfo(p peer.ID) *TagInfo {
 		return nil
 	}
 
-	out := &TagInfo{
+	out := &ifconnmgr.TagInfo{
 		FirstSeen: pi.firstSeen,
 		Value:     pi.value,
 		Tags:      make(map[string]int),
