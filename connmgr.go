@@ -31,8 +31,6 @@ type connManager struct {
 
 var _ ifconnmgr.ConnManager = (*connManager)(nil)
 
-var DefaultGracePeriod = time.Second * 10
-
 func NewConnManager(low, hi int, grace time.Duration) ifconnmgr.ConnManager {
 	return &connManager{
 		highWater:   hi,
