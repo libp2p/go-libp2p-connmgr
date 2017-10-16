@@ -2,7 +2,6 @@ package connmgr
 
 import (
 	"context"
-	"io"
 	"sort"
 	"sync"
 	"time"
@@ -53,20 +52,23 @@ type peerInfo struct {
 }
 
 func (cm *connManager) TrimOpenConns(ctx context.Context) {
+	defer log.EventBegin(ctx, "connCleanup").Done()
 	for _, c := range cm.getConnsToClose(ctx) {
+		log.Info("closing conn: ", c.RemotePeer())
+		log.Event(ctx, "closeConn", c.RemotePeer())
 		c.Close()
 	}
 }
 
-func (cm *connManager) getConnsToClose(ctx context.Context) []io.Closer {
+func (cm *connManager) getConnsToClose(ctx context.Context) []inet.Conn {
 	cm.lk.Lock()
 	defer cm.lk.Unlock()
-	defer log.EventBegin(ctx, "connCleanup").Done()
 	if cm.lowWater == 0 || cm.highWater == 0 {
 		// disabled
 		return nil
 	}
-	cm.lastTrim = time.Now()
+	now := time.Now()
+	cm.lastTrim = now
 
 	if len(cm.peers) < cm.lowWater {
 		log.Info("open connection count below limit")
@@ -83,20 +85,22 @@ func (cm *connManager) getConnsToClose(ctx context.Context) []io.Closer {
 		return infos[i].value < infos[j].value
 	})
 
-	close_count := len(infos) - cm.lowWater
-	toclose := infos[:close_count]
+	closeCount := len(infos) - cm.lowWater
+	toclose := infos[:closeCount]
 
-	var closed []io.Closer
+	// 2x number of peers we're disconnecting from because we may have more
+	// than one connection per peer. Slightly over allocating isn't an issue
+	// as this is a very short-lived array.
+	closed := make([]inet.Conn, 0, len(toclose)*2)
 
 	for _, inf := range toclose {
-		if time.Since(inf.firstSeen) < cm.gracePeriod {
+		// TODO: should we be using firstSeen or the time associated with the connection itself?
+		if inf.firstSeen.Add(cm.gracePeriod).After(now) {
 			continue
 		}
 
 		// TODO: if a peer has more than one connection, maybe only close one?
-		for c, _ := range inf.conns {
-			log.Info("closing conn: ", c.RemotePeer())
-			log.Event(ctx, "closeConn", c.RemotePeer())
+		for c := range inf.conns {
 			// TODO: probably don't want to always do this in a goroutine
 			closed = append(closed, c)
 		}
