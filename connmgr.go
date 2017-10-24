@@ -15,7 +15,7 @@ import (
 
 var log = logging.Logger("connmgr")
 
-type connManager struct {
+type BasicConnMgr struct {
 	highWater int
 	lowWater  int
 
@@ -29,10 +29,10 @@ type connManager struct {
 	lastTrim time.Time
 }
 
-var _ ifconnmgr.ConnManager = (*connManager)(nil)
+var _ ifconnmgr.ConnManager = (*BasicConnMgr)(nil)
 
-func NewConnManager(low, hi int, grace time.Duration) ifconnmgr.ConnManager {
-	return &connManager{
+func NewConnManager(low, hi int, grace time.Duration) *BasicConnMgr {
+	return &BasicConnMgr{
 		highWater:   hi,
 		lowWater:    low,
 		gracePeriod: grace,
@@ -49,7 +49,7 @@ type peerInfo struct {
 	firstSeen time.Time
 }
 
-func (cm *connManager) TrimOpenConns(ctx context.Context) {
+func (cm *BasicConnMgr) TrimOpenConns(ctx context.Context) {
 	defer log.EventBegin(ctx, "connCleanup").Done()
 	for _, c := range cm.getConnsToClose(ctx) {
 		log.Info("closing conn: ", c.RemotePeer())
@@ -58,7 +58,7 @@ func (cm *connManager) TrimOpenConns(ctx context.Context) {
 	}
 }
 
-func (cm *connManager) getConnsToClose(ctx context.Context) []inet.Conn {
+func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 	cm.lk.Lock()
 	defer cm.lk.Unlock()
 	if cm.lowWater == 0 || cm.highWater == 0 {
@@ -107,7 +107,7 @@ func (cm *connManager) getConnsToClose(ctx context.Context) []inet.Conn {
 	return closed
 }
 
-func (cm *connManager) GetTagInfo(p peer.ID) *ifconnmgr.TagInfo {
+func (cm *BasicConnMgr) GetTagInfo(p peer.ID) *ifconnmgr.TagInfo {
 	cm.lk.Lock()
 	defer cm.lk.Unlock()
 
@@ -133,7 +133,7 @@ func (cm *connManager) GetTagInfo(p peer.ID) *ifconnmgr.TagInfo {
 	return out
 }
 
-func (cm *connManager) TagPeer(p peer.ID, tag string, val int) {
+func (cm *BasicConnMgr) TagPeer(p peer.ID, tag string, val int) {
 	cm.lk.Lock()
 	defer cm.lk.Unlock()
 
@@ -147,7 +147,7 @@ func (cm *connManager) TagPeer(p peer.ID, tag string, val int) {
 	pi.tags[tag] = val
 }
 
-func (cm *connManager) UntagPeer(p peer.ID, tag string) {
+func (cm *BasicConnMgr) UntagPeer(p peer.ID, tag string) {
 	cm.lk.Lock()
 	defer cm.lk.Unlock()
 
@@ -161,14 +161,35 @@ func (cm *connManager) UntagPeer(p peer.ID, tag string) {
 	delete(pi.tags, tag)
 }
 
-func (cm *connManager) Notifee() inet.Notifiee {
+type CMInfo struct {
+	LowWater    int
+	HighWater   int
+	LastTrim    time.Time
+	GracePeriod time.Duration
+	ConnCount   int
+}
+
+func (cm *BasicConnMgr) GetInfo() CMInfo {
+	cm.lk.Lock()
+	defer cm.lk.Unlock()
+
+	return CMInfo{
+		HighWater:   cm.highWater,
+		LowWater:    cm.lowWater,
+		LastTrim:    cm.lastTrim,
+		GracePeriod: cm.gracePeriod,
+		ConnCount:   cm.connCount,
+	}
+}
+
+func (cm *BasicConnMgr) Notifee() inet.Notifiee {
 	return (*cmNotifee)(cm)
 }
 
-type cmNotifee connManager
+type cmNotifee BasicConnMgr
 
-func (nn *cmNotifee) cm() *connManager {
-	return (*connManager)(nn)
+func (nn *cmNotifee) cm() *BasicConnMgr {
+	return (*BasicConnMgr)(nn)
 }
 
 func (nn *cmNotifee) Connected(n inet.Network, c inet.Conn) {
