@@ -139,7 +139,7 @@ func (cm *BasicConnMgr) TagPeer(p peer.ID, tag string, val int) {
 
 	pi, ok := cm.peers[p]
 	if !ok {
-		log.Error("tried to tag conn from untracked peer: ", p)
+		log.Info("tried to tag conn from untracked peer: ", p)
 		return
 	}
 
@@ -153,7 +153,7 @@ func (cm *BasicConnMgr) UntagPeer(p peer.ID, tag string) {
 
 	pi, ok := cm.peers[p]
 	if !ok {
-		log.Error("tried to remove tag from untracked peer: ", p)
+		log.Info("tried to remove tag from untracked peer: ", p)
 		return
 	}
 
