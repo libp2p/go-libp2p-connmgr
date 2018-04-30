@@ -39,7 +39,7 @@
   ],
   "gxVersion": "0.11.0",
   "language": "go",
-  "license": "",
+  "license": "MIT",
   "name": "go-libp2p-connmgr",
   "releaseCmd": "git commit -a -m \"gx publish $VERSION\"",
   "version": "0.3.8"
