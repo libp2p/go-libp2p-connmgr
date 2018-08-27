@@ -293,13 +293,13 @@ func (nn *cmNotifee) Disconnected(n inet.Network, c inet.Conn) {
 }
 
 // Listen is no-op in this implementation.
-func (nn *cmNotifee) Listen(n inet.Network, addr ma.Multiaddr)      {}
+func (nn *cmNotifee) Listen(n inet.Network, addr ma.Multiaddr) {}
 
 // ListenClose is no-op in this implementation.
 func (nn *cmNotifee) ListenClose(n inet.Network, addr ma.Multiaddr) {}
 
 // OpenedStream is no-op in this implementation.
-func (nn *cmNotifee) OpenedStream(inet.Network, inet.Stream)        {}
+func (nn *cmNotifee) OpenedStream(inet.Network, inet.Stream) {}
 
 // ClosedStream is no-op in this implementation.
-func (nn *cmNotifee) ClosedStream(inet.Network, inet.Stream)        {}
+func (nn *cmNotifee) ClosedStream(inet.Network, inet.Stream) {}
