@@ -14,9 +14,9 @@
     },
     {
       "author": "whyrusleeping",
-      "hash": "QmX1VAqodkn8yFJe7gYFs8PvrSCVsCWcTUBgxswoeC3J4K",
+      "hash": "QmXmkWCiVumBA1MMfPHHoUaCoVo7H5uceEXjzYCVkwVxN9",
       "name": "go-libp2p-net",
-      "version": "3.0.17"
+      "version": "3.0.18"
     },
     {
       "author": "multiformats",
@@ -26,21 +26,21 @@
     },
     {
       "author": "whyrusleeping",
-      "hash": "QmbtxgRVMQS2fZpuwowZRQUg3QNri9yuHSFGfXUrqoSABU",
+      "hash": "Qmcxbk5F1rJ9KeJaKRoZNG7qrexftEM7Rz9y15hi5FHAuk",
       "name": "go-testutil",
-      "version": "1.2.11"
+      "version": "1.2.12"
     },
     {
       "author": "why",
-      "hash": "QmeiGg65GR8ifGTEiM5qoxu4PqiuwUQPkWjXEkuCqMJBKS",
+      "hash": "Qmdv8PZ3Hdk3VxAZmTeuz8rmNGcjdGEqDRt7jJvz3hyTUH",
       "name": "go-libp2p-interface-connmgr",
-      "version": "0.0.22"
+      "version": "0.0.23"
     },
     {
       "author": "whyrusleeping",
-      "hash": "QmUz7HmU4ws577TMEVNoTjNghVvq2jXnxnVhbkNXKPKpgK",
+      "hash": "Qme2jJHLnAfULnkrSxmqAn7pGTp3HWVmFYLnuLtxFvH9nA",
       "name": "go-libp2p-peer",
-      "version": "2.4.1"
+      "version": "2.4.2"
     }
   ],
   "gxVersion": "0.11.0",
@@ -48,6 +48,6 @@
   "license": "MIT",
   "name": "go-libp2p-connmgr",
   "releaseCmd": "git commit -a -m \"gx publish $VERSION\"",
-  "version": "0.3.24"
+  "version": "0.3.25"
 }
 
