@@ -164,8 +164,12 @@ func (cm *BasicConnMgr) TagPeer(p peer.ID, tag string, val int) {
 
 	pi, ok := cm.peers[p]
 	if !ok {
-		log.Info("tried to tag conn from untracked peer: ", p)
-		return
+		pi = &peerInfo{
+			firstSeen: time.Now(),
+			tags:      make(map[string]int),
+			conns:     make(map[inet.Conn]time.Time),
+		}
+		cm.peers[p] = pi
 	}
 
 	// Update the total value of the peer.
