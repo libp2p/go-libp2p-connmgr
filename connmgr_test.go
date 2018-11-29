@@ -184,8 +184,8 @@ func TestTagPeerNonExistant(t *testing.T) {
 	id := tu.RandPeerIDFatal(t)
 	cm.TagPeer(id, "test", 1)
 
-	if len(cm.peers) != 0 {
-		t.Fatal("expected zero peers")
+	if len(cm.peers) != 1 {
+		t.Fatal("expected 1 peer")
 	}
 }
 
