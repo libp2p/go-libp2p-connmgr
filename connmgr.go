@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	logging "github.com/ipfs/go-log"
@@ -12,6 +13,8 @@ import (
 	"github.com/libp2p/go-libp2p-peer"
 	ma "github.com/multiformats/go-multiaddr"
 )
+
+const silencePeriod = 10 * time.Second
 
 var log = logging.Logger("connmgr")
 
@@ -23,17 +26,16 @@ var log = logging.Logger("connmgr")
 //
 // See configuration parameters in NewConnManager.
 type BasicConnMgr struct {
-	highWater int
-	lowWater  int
-
+	lk          sync.Mutex
+	highWater   int
+	lowWater    int
+	connCount   int
 	gracePeriod time.Duration
+	peers       map[peer.ID]*peerInfo
 
-	peers     map[peer.ID]*peerInfo
-	connCount int
-
-	lk sync.Mutex
-
-	lastTrim time.Time
+	// guarded by atomic; 0=not running, 1=running.
+	trimRunning int32
+	lastTrim    time.Time
 }
 
 var _ ifconnmgr.ConnManager = (*BasicConnMgr)(nil)
@@ -68,12 +70,25 @@ type peerInfo struct {
 // pruning those peers with the lowest scores first, as long as they are not within their
 // grace period.
 func (cm *BasicConnMgr) TrimOpenConns(ctx context.Context) {
+	if !atomic.CompareAndSwapInt32(&cm.trimRunning, 0, 1) {
+		// a trim is running, skip this one.
+		return
+	}
+
+	defer atomic.StoreInt32(&cm.trimRunning, 0)
+	if time.Since(cm.lastTrim) < silencePeriod {
+		// skip this attempt to trim as the last one just took place.
+		return
+	}
+
 	defer log.EventBegin(ctx, "connCleanup").Done()
 	for _, c := range cm.getConnsToClose(ctx) {
 		log.Info("closing conn: ", c.RemotePeer())
 		log.Event(ctx, "closeConn", c.RemotePeer())
 		c.Close()
 	}
+
+	cm.lastTrim = time.Now()
 }
 
 // getConnsToClose runs the heuristics described in TrimOpenConns and returns the
@@ -87,8 +102,6 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 		return nil
 	}
 	now := time.Now()
-	cm.lastTrim = now
-
 	if len(cm.peers) < cm.lowWater {
 		log.Info("open connection count below limit")
 		return nil
@@ -263,9 +276,7 @@ func (nn *cmNotifee) Connected(n inet.Network, c inet.Conn) {
 	cm.connCount++
 
 	if cm.connCount > nn.highWater {
-		if cm.lastTrim.IsZero() || time.Since(cm.lastTrim) > time.Second*10 {
-			go cm.TrimOpenConns(context.Background())
-		}
+		go cm.TrimOpenConns(context.Background())
 	}
 }
 
