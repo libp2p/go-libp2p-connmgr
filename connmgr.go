@@ -4,13 +4,12 @@ import (
 	"context"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	logging "github.com/ipfs/go-log"
-	"github.com/libp2p/go-libp2p-interface-connmgr"
+	ifconnmgr "github.com/libp2p/go-libp2p-interface-connmgr"
 	inet "github.com/libp2p/go-libp2p-net"
-	"github.com/libp2p/go-libp2p-peer"
+	peer "github.com/libp2p/go-libp2p-peer"
 	ma "github.com/multiformats/go-multiaddr"
 )
 
@@ -33,9 +32,9 @@ type BasicConnMgr struct {
 	gracePeriod time.Duration
 	peers       map[peer.ID]*peerInfo
 
-	// guarded by atomic; 0=not running, 1=running.
-	trimRunning int32
-	lastTrim    time.Time
+	// channel-based semaphore that enforces only a single trim is in progress
+	trimRunningCh chan struct{}
+	lastTrim      time.Time
 }
 
 var _ ifconnmgr.ConnManager = (*BasicConnMgr)(nil)
@@ -48,10 +47,11 @@ var _ ifconnmgr.ConnManager = (*BasicConnMgr)(nil)
 //   subject to pruning.
 func NewConnManager(low, hi int, grace time.Duration) *BasicConnMgr {
 	return &BasicConnMgr{
-		highWater:   hi,
-		lowWater:    low,
-		gracePeriod: grace,
-		peers:       make(map[peer.ID]*peerInfo),
+		highWater:     hi,
+		lowWater:      low,
+		gracePeriod:   grace,
+		peers:         make(map[peer.ID]*peerInfo),
+		trimRunningCh: make(chan struct{}, 1),
 	}
 }
 
@@ -69,25 +69,26 @@ type peerInfo struct {
 // equal the low watermark. Peers are sorted in ascending order based on their total value,
 // pruning those peers with the lowest scores first, as long as they are not within their
 // grace period.
+//
+// TODO: error return value so we can cleanly signal we are aborting because:
+// (a) there's another trim in progress, or (b) the silence period is in effect.
 func (cm *BasicConnMgr) TrimOpenConns(ctx context.Context) {
-	if !atomic.CompareAndSwapInt32(&cm.trimRunning, 0, 1) {
-		// a trim is running, skip this one.
+	select {
+	case cm.trimRunningCh <- struct{}{}:
+	default:
 		return
 	}
-
-	defer atomic.StoreInt32(&cm.trimRunning, 0)
+	defer func() { <-cm.trimRunningCh }()
 	if time.Since(cm.lastTrim) < silencePeriod {
 		// skip this attempt to trim as the last one just took place.
 		return
 	}
-
 	defer log.EventBegin(ctx, "connCleanup").Done()
 	for _, c := range cm.getConnsToClose(ctx) {
 		log.Info("closing conn: ", c.RemotePeer())
 		log.Event(ctx, "closeConn", c.RemotePeer())
 		c.Close()
 	}
-
 	cm.lastTrim = time.Now()
 }
 
