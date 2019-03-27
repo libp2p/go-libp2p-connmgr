@@ -13,7 +13,7 @@ import (
 	ma "github.com/multiformats/go-multiaddr"
 )
 
-const silencePeriod = 10 * time.Second
+var SilencePeriod = 10 * time.Second
 
 var log = logging.Logger("connmgr")
 
@@ -32,9 +32,13 @@ type BasicConnMgr struct {
 	gracePeriod time.Duration
 	peers       map[peer.ID]*peerInfo
 
+	plk       sync.RWMutex
+	protected map[peer.ID]struct{}
+
 	// channel-based semaphore that enforces only a single trim is in progress
 	trimRunningCh chan struct{}
 	lastTrim      time.Time
+	silencePeriod time.Duration
 }
 
 var _ ifconnmgr.ConnManager = (*BasicConnMgr)(nil)
@@ -52,7 +56,21 @@ func NewConnManager(low, hi int, grace time.Duration) *BasicConnMgr {
 		gracePeriod:   grace,
 		peers:         make(map[peer.ID]*peerInfo),
 		trimRunningCh: make(chan struct{}, 1),
+		protected:     make(map[peer.ID]struct{}, 16),
+		silencePeriod: SilencePeriod,
 	}
+}
+
+func (cm *BasicConnMgr) Protect(id peer.ID) {
+	cm.plk.Lock()
+	defer cm.plk.Unlock()
+	cm.protected[id] = struct{}{}
+}
+
+func (cm *BasicConnMgr) Unprotect(id peer.ID) {
+	cm.plk.Lock()
+	defer cm.plk.Unlock()
+	delete(cm.protected, id)
 }
 
 // peerInfo stores metadata for a given peer.
@@ -79,7 +97,7 @@ func (cm *BasicConnMgr) TrimOpenConns(ctx context.Context) {
 		return
 	}
 	defer func() { <-cm.trimRunningCh }()
-	if time.Since(cm.lastTrim) < silencePeriod {
+	if time.Since(cm.lastTrim) < cm.silencePeriod {
 		// skip this attempt to trim as the last one just took place.
 		return
 	}
@@ -110,9 +128,15 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 
 	var infos []*peerInfo
 
-	for _, inf := range cm.peers {
+	cm.plk.RLock()
+	for id, inf := range cm.peers {
+		if _, ok := cm.protected[id]; ok {
+			// skip protected peer; it's not eligible for pruning.
+			continue
+		}
 		infos = append(infos, inf)
 	}
+	cm.plk.RUnlock()
 
 	// Sort peers according to their value.
 	sort.Slice(infos, func(i, j int) bool {

@@ -331,3 +331,64 @@ func TestQuickBurstRespectsSilencePeriod(t *testing.T) {
 		t.Fatalf("expected closed connections + open conn count to equal 30, value: %d", total)
 	}
 }
+
+func TestPeerProtection(t *testing.T) {
+	SilencePeriod = 0
+	cm := NewConnManager(10, 20, 0)
+	SilencePeriod = 10 * time.Second
+
+	not := cm.Notifee()
+
+	// produce 20 connections with unique peers.
+	var conns []inet.Conn
+	for i := 0; i < 20; i++ {
+		rc := randConn(t, not.Disconnected)
+		conns = append(conns, rc)
+		not.Connected(nil, rc)
+		cm.TagPeer(rc.RemotePeer(), "test", 20)
+	}
+
+	// protect the first 5 peers.
+	var protected []inet.Conn
+	for _, c := range conns[0:5] {
+		cm.Protect(c.RemotePeer())
+		protected = append(protected, c)
+		// remove the tag to make them even more eligible for pruning.
+		cm.UntagPeer(c.RemotePeer(), "test")
+	}
+
+	// add one more connection, sending the connection manager overboard.
+	not.Connected(nil, randConn(t, not.Disconnected))
+
+	// the pruning happens in the background -- this timing condition is not good.
+	time.Sleep(1 * time.Second)
+
+	for _, c := range protected {
+		if c.(*tconn).closed {
+			t.Error("protected connection was closed by connection manager")
+		}
+	}
+
+	// unprotect the first peer.
+	cm.Unprotect(protected[0].RemotePeer())
+
+	// add 11 more connections, sending the connection manager overboard again.
+	for i := 0; i < 11; i++ {
+		rc := randConn(t, not.Disconnected)
+		conns = append(conns, rc)
+		not.Connected(nil, rc)
+		cm.TagPeer(rc.RemotePeer(), "test", 20)
+	}
+
+	// the pruning happens in the background -- this timing condition is not good.
+	time.Sleep(1 * time.Second)
+
+	if !protected[0].(*tconn).closed {
+		t.Error("unprotected connection was kept open by connection manager")
+	}
+	for _, c := range protected[1:] {
+		if c.(*tconn).closed {
+			t.Error("protected connection was closed by connection manager")
+		}
+	}
+}
