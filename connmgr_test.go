@@ -317,6 +317,9 @@ func TestQuickBurstRespectsSilencePeriod(t *testing.T) {
 	// wait for a few seconds
 	time.Sleep(time.Second * 3)
 
+	cm.lk.Lock() // pacify the race detector
+	defer cm.lk.Unlock()
+
 	// only the first trim is allowed in; make sure we close at most 20 connections, not all of them.
 	var closed int
 	for _, c := range conns {
@@ -332,9 +335,9 @@ func TestQuickBurstRespectsSilencePeriod(t *testing.T) {
 	}
 }
 
-func TestPeerProtection(t *testing.T) {
+func TestPeerProtectionSingleTag(t *testing.T) {
 	SilencePeriod = 0
-	cm := NewConnManager(10, 20, 0)
+	cm := NewConnManager(19, 20, 0)
 	SilencePeriod = 10 * time.Second
 
 	not := cm.Notifee()
@@ -351,10 +354,10 @@ func TestPeerProtection(t *testing.T) {
 	// protect the first 5 peers.
 	var protected []inet.Conn
 	for _, c := range conns[0:5] {
-		cm.Protect(c.RemotePeer())
+		cm.Protect(c.RemotePeer(), "global")
 		protected = append(protected, c)
-		// remove the tag to make them even more eligible for pruning.
-		cm.UntagPeer(c.RemotePeer(), "test")
+		// tag them negatively to make them preferred for pruning.
+		cm.TagPeer(c.RemotePeer(), "test", -100)
 	}
 
 	// add one more connection, sending the connection manager overboard.
@@ -370,10 +373,10 @@ func TestPeerProtection(t *testing.T) {
 	}
 
 	// unprotect the first peer.
-	cm.Unprotect(protected[0].RemotePeer())
+	cm.Unprotect(protected[0].RemotePeer(), "global")
 
-	// add 11 more connections, sending the connection manager overboard again.
-	for i := 0; i < 11; i++ {
+	// add 2 more connections, sending the connection manager overboard again.
+	for i := 0; i < 2; i++ {
 		rc := randConn(t, not.Disconnected)
 		conns = append(conns, rc)
 		not.Connected(nil, rc)
@@ -383,6 +386,9 @@ func TestPeerProtection(t *testing.T) {
 	// the pruning happens in the background -- this timing condition is not good.
 	time.Sleep(1 * time.Second)
 
+	cm.lk.Lock() // pacify the race detector
+	defer cm.lk.Unlock()
+
 	if !protected[0].(*tconn).closed {
 		t.Error("unprotected connection was kept open by connection manager")
 	}
@@ -390,5 +396,128 @@ func TestPeerProtection(t *testing.T) {
 		if c.(*tconn).closed {
 			t.Error("protected connection was closed by connection manager")
 		}
+	}
+}
+
+func TestPeerProtectionMultipleTags(t *testing.T) {
+	SilencePeriod = 0
+	cm := NewConnManager(19, 20, 0)
+	SilencePeriod = 10 * time.Second
+
+	not := cm.Notifee()
+
+	// produce 20 connections with unique peers.
+	var conns []inet.Conn
+	for i := 0; i < 20; i++ {
+		rc := randConn(t, not.Disconnected)
+		conns = append(conns, rc)
+		not.Connected(nil, rc)
+		cm.TagPeer(rc.RemotePeer(), "test", 20)
+	}
+
+	// protect the first 5 peers under two tags.
+	var protected []inet.Conn
+	for _, c := range conns[0:5] {
+		cm.Protect(c.RemotePeer(), "tag1")
+		cm.Protect(c.RemotePeer(), "tag2")
+		protected = append(protected, c)
+		// tag them negatively to make them preferred for pruning.
+		cm.TagPeer(c.RemotePeer(), "test", -100)
+	}
+
+	// add one more connection, sending the connection manager overboard.
+	not.Connected(nil, randConn(t, not.Disconnected))
+
+	// the pruning happens in the background -- this timing condition is not good.
+	time.Sleep(1 * time.Second)
+
+	for _, c := range protected {
+		if c.(*tconn).closed {
+			t.Error("protected connection was closed by connection manager")
+		}
+	}
+
+	// remove the protection from one tag.
+	for _, c := range protected {
+		if !cm.Unprotect(c.RemotePeer(), "tag1") {
+			t.Error("peer should still be protected")
+		}
+	}
+
+	// add 2 more connections, sending the connection manager overboard again.
+	for i := 0; i < 2; i++ {
+		rc := randConn(t, not.Disconnected)
+		conns = append(conns, rc)
+		not.Connected(nil, rc)
+		cm.TagPeer(rc.RemotePeer(), "test", 20)
+	}
+
+	// the pruning happens in the background -- this timing condition is not good.
+	time.Sleep(1 * time.Second)
+
+	// connections should still remain open, as they were protected.
+	for _, c := range protected[0:] {
+		if c.(*tconn).closed {
+			t.Error("protected connection was closed by connection manager")
+		}
+	}
+
+	// unprotect the first peer entirely.
+	cm.Unprotect(protected[0].RemotePeer(), "tag2")
+
+	// add 2 more connections, sending the connection manager overboard again.
+	for i := 0; i < 2; i++ {
+		rc := randConn(t, not.Disconnected)
+		conns = append(conns, rc)
+		not.Connected(nil, rc)
+		cm.TagPeer(rc.RemotePeer(), "test", 20)
+	}
+
+	// the pruning happens in the background -- this timing condition is not good.
+	time.Sleep(1 * time.Second)
+
+	cm.lk.Lock() // pacify the race detector
+	defer cm.lk.Unlock()
+
+	if !protected[0].(*tconn).closed {
+		t.Error("unprotected connection was kept open by connection manager")
+	}
+	for _, c := range protected[1:] {
+		if c.(*tconn).closed {
+			t.Error("protected connection was closed by connection manager")
+		}
+	}
+
+}
+
+func TestPeerProtectionIdempotent(t *testing.T) {
+	SilencePeriod = 0
+	cm := NewConnManager(10, 20, 0)
+	SilencePeriod = 10 * time.Second
+
+	id, _ := tu.RandPeerID()
+	cm.Protect(id, "global")
+	cm.Protect(id, "global")
+	cm.Protect(id, "global")
+	cm.Protect(id, "global")
+
+	if len(cm.protected[id]) > 1 {
+		t.Error("expected peer to be protected only once")
+	}
+
+	if !cm.Unprotect(id, "unused") {
+		t.Error("expected peer to continue to be protected")
+	}
+
+	if !cm.Unprotect(id, "unused2") {
+		t.Error("expected peer to continue to be protected")
+	}
+
+	if cm.Unprotect(id, "global") {
+		t.Error("expected peer to be unprotected")
+	}
+
+	if len(cm.protected) > 0 {
+		t.Error("expected no protections")
 	}
 }

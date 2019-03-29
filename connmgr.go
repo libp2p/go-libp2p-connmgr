@@ -33,7 +33,7 @@ type BasicConnMgr struct {
 	peers       map[peer.ID]*peerInfo
 
 	plk       sync.RWMutex
-	protected map[peer.ID]struct{}
+	protected map[peer.ID]map[string]struct{}
 
 	// channel-based semaphore that enforces only a single trim is in progress
 	trimRunningCh chan struct{}
@@ -56,25 +56,41 @@ func NewConnManager(low, hi int, grace time.Duration) *BasicConnMgr {
 		gracePeriod:   grace,
 		peers:         make(map[peer.ID]*peerInfo),
 		trimRunningCh: make(chan struct{}, 1),
-		protected:     make(map[peer.ID]struct{}, 16),
+		protected:     make(map[peer.ID]map[string]struct{}, 16),
 		silencePeriod: SilencePeriod,
 	}
 }
 
-func (cm *BasicConnMgr) Protect(id peer.ID) {
+func (cm *BasicConnMgr) Protect(id peer.ID, tag string) {
 	cm.plk.Lock()
 	defer cm.plk.Unlock()
-	cm.protected[id] = struct{}{}
+
+	tags, ok := cm.protected[id]
+	if !ok {
+		tags = make(map[string]struct{}, 2)
+		cm.protected[id] = tags
+	}
+	tags[tag] = struct{}{}
 }
 
-func (cm *BasicConnMgr) Unprotect(id peer.ID) {
+func (cm *BasicConnMgr) Unprotect(id peer.ID, tag string) (protected bool) {
 	cm.plk.Lock()
 	defer cm.plk.Unlock()
-	delete(cm.protected, id)
+
+	tags, ok := cm.protected[id]
+	if !ok {
+		return false
+	}
+	if delete(tags, tag); len(tags) == 0 {
+		delete(cm.protected, id)
+		return false
+	}
+	return true
 }
 
 // peerInfo stores metadata for a given peer.
 type peerInfo struct {
+	id    peer.ID
 	tags  map[string]int // value for each tag
 	value int            // cached sum of all tag values
 
@@ -126,45 +142,46 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 		return nil
 	}
 
-	var infos []*peerInfo
-
+	var candidates []*peerInfo
 	cm.plk.RLock()
 	for id, inf := range cm.peers {
 		if _, ok := cm.protected[id]; ok {
-			// skip protected peer; it's not eligible for pruning.
+			// skip over protected peer.
 			continue
 		}
-		infos = append(infos, inf)
+		candidates = append(candidates, inf)
 	}
 	cm.plk.RUnlock()
 
 	// Sort peers according to their value.
-	sort.Slice(infos, func(i, j int) bool {
-		return infos[i].value < infos[j].value
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].value < candidates[j].value
 	})
 
-	closeCount := len(infos) - cm.lowWater
-	toclose := infos[:closeCount]
+	target := len(cm.peers) - cm.lowWater
 
 	// 2x number of peers we're disconnecting from because we may have more
 	// than one connection per peer. Slightly over allocating isn't an issue
 	// as this is a very short-lived array.
-	closed := make([]inet.Conn, 0, len(toclose)*2)
+	selected := make([]inet.Conn, 0, target*2)
 
-	for _, inf := range toclose {
+	for _, inf := range candidates {
 		// TODO: should we be using firstSeen or the time associated with the connection itself?
 		if inf.firstSeen.Add(cm.gracePeriod).After(now) {
 			continue
 		}
 
-		// TODO: if a peer has more than one connection, maybe only close one?
 		for c := range inf.conns {
-			// TODO: probably don't want to always do this in a goroutine
-			closed = append(closed, c)
+			selected = append(selected, c)
+		}
+
+		target--
+		if target == 0 {
+			break
 		}
 	}
 
-	return closed
+	return selected
 }
 
 // GetTagInfo is called to fetch the tag information associated with a given
