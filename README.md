@@ -40,3 +40,7 @@ Small note: If editing the Readme, please conform to the [standard-readme](https
 ## License
 
 MIT © Whyrusleeping
+
+---
+
+The last gx published version of this module was: 0.3.34: QmSTKY2v62v9RjcfTMCFKMVAWvVjWGixkYWEi68iG7e1TT
