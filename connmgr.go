@@ -159,11 +159,15 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 		left, right := candidates[i], candidates[j]
 		// temporary peers are preferred for pruning.
 		if left.temp {
+			if right.temp {
+				goto Values
+			}
 			return true
 		}
 		if right.temp {
 			return false
 		}
+	Values:
 		return left.value < right.value
 	})
 
