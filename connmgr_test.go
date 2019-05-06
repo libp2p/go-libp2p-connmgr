@@ -189,8 +189,8 @@ func TestTagPeerNonExistant(t *testing.T) {
 	id := tu.RandPeerIDFatal(t)
 	cm.TagPeer(id, "test", 1)
 
-	if len(cm.peers) != 0 {
-		t.Fatal("expected zero peers")
+	if !cm.peers[id].temp {
+		t.Fatal("expected 1 temporary entry")
 	}
 }
 
@@ -552,4 +552,43 @@ func TestUpsertTag(t *testing.T) {
 	if cm.peers[rp].value != 1 {
 		t.Fatal("expected a tag value of 1")
 	}
+}
+
+func TestTemporaryEntriesClearedFirst(t *testing.T) {
+	cm := NewConnManager(1, 1, 0)
+
+	id := tu.RandPeerIDFatal(t)
+	cm.TagPeer(id, "test", 20)
+
+	if cm.GetTagInfo(id).Value != 20 {
+		t.Fatal("expected an early tag with value 20")
+	}
+
+	not := cm.Notifee()
+	conn := randConn(t, nil)
+	not.Connected(nil, conn)
+
+	cm.TrimOpenConns(context.Background())
+	if cm.GetTagInfo(id) != nil {
+		t.Fatal("expected no temporary tags after trimming")
+	}
+}
+
+func TestTemporaryEntryConvertedOnConnection(t *testing.T) {
+	cm := NewConnManager(1, 1, 0)
+
+	conn := randConn(t, nil)
+	cm.TagPeer(conn.RemotePeer(), "test", 20)
+
+	if ti := cm.peers[conn.RemotePeer()]; ti.value != 20 || !ti.temp {
+		t.Fatal("expected a temporary tag with value 20")
+	}
+
+	not := cm.Notifee()
+	not.Connected(nil, conn)
+
+	if ti := cm.peers[conn.RemotePeer()]; ti.value != 20 || ti.temp {
+		t.Fatal("expected a non-temporary tag with value 20")
+	}
+
 }
