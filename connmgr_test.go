@@ -521,3 +521,35 @@ func TestPeerProtectionIdempotent(t *testing.T) {
 		t.Error("expected no protections")
 	}
 }
+
+func TestUpsertTag(t *testing.T) {
+	cm := NewConnManager(1, 1, time.Duration(10*time.Minute))
+	not := cm.Notifee()
+	conn := randConn(t, nil)
+	not.Connected(nil, conn)
+	rp := conn.RemotePeer()
+
+	cm.UpsertTag(rp, "tag", func(v int) int { return v + 1 })
+	if len(cm.peers[rp].tags) != 1 {
+		t.Fatal("expected a tag")
+	}
+	if cm.peers[rp].value != 1 {
+		t.Fatal("expected a tag value of 1")
+	}
+
+	cm.UpsertTag(rp, "tag", func(v int) int { return v + 1 })
+	if len(cm.peers[rp].tags) != 1 {
+		t.Fatal("expected a tag")
+	}
+	if cm.peers[rp].value != 2 {
+		t.Fatal("expected a tag value of 2")
+	}
+
+	cm.UpsertTag(rp, "tag", func(v int) int { return v - 1 })
+	if len(cm.peers[rp].tags) != 1 {
+		t.Fatal("expected a tag")
+	}
+	if cm.peers[rp].value != 1 {
+		t.Fatal("expected a tag value of 1")
+	}
+}
