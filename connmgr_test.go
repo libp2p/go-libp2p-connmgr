@@ -526,9 +526,9 @@ func TestUpsertTag(t *testing.T) {
 	cm := NewConnManager(1, 1, time.Duration(10*time.Minute))
 	not := cm.Notifee()
 	conn := randConn(t, nil)
-	not.Connected(nil, conn)
 	rp := conn.RemotePeer()
 
+	// this is an early tag, before the Connected notification arrived.
 	cm.UpsertTag(rp, "tag", func(v int) int { return v + 1 })
 	if len(cm.peers[rp].tags) != 1 {
 		t.Fatal("expected a tag")
@@ -536,6 +536,9 @@ func TestUpsertTag(t *testing.T) {
 	if cm.peers[rp].value != 1 {
 		t.Fatal("expected a tag value of 1")
 	}
+
+	// now let's notify the connection.
+	not.Connected(nil, conn)
 
 	cm.UpsertTag(rp, "tag", func(v int) int { return v + 1 })
 	if len(cm.peers[rp].tags) != 1 {

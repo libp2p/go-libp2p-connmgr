@@ -232,18 +232,7 @@ func (cm *BasicConnMgr) TagPeer(p peer.ID, tag string, val int) {
 	cm.lk.Lock()
 	defer cm.lk.Unlock()
 
-	pi, ok := cm.peers[p]
-	if !ok {
-		// create a temporary peer to buffer early tags before the Connected notification arrives.
-		pi = &peerInfo{
-			id:        p,
-			firstSeen: time.Now(), // this timestamp will be updated when the first Connected notification arrives.
-			temp:      true,
-			tags:      make(map[string]int),
-			conns:     make(map[inet.Conn]time.Time),
-		}
-		cm.peers[p] = pi
-	}
+	pi := cm.tagInfoFor(p)
 
 	// Update the total value of the peer.
 	pi.value += val - pi.tags[tag]
@@ -271,16 +260,29 @@ func (cm *BasicConnMgr) UpsertTag(p peer.ID, tag string, upsert func(int) int) {
 	cm.lk.Lock()
 	defer cm.lk.Unlock()
 
-	pi, ok := cm.peers[p]
-	if !ok {
-		log.Info("tried to upsert tag from untracked peer: ", p)
-		return
-	}
+	pi := cm.tagInfoFor(p)
 
 	oldval := pi.tags[tag]
 	newval := upsert(oldval)
 	pi.value += newval - oldval
 	pi.tags[tag] = newval
+}
+
+func (cm *BasicConnMgr) tagInfoFor(p peer.ID) *peerInfo {
+	pi, ok := cm.peers[p]
+	if ok {
+		return pi
+	}
+	// create a temporary peer to buffer early tags before the Connected notification arrives.
+	pi = &peerInfo{
+		id:        p,
+		firstSeen: time.Now(), // this timestamp will be updated when the first Connected notification arrives.
+		temp:      true,
+		tags:      make(map[string]int),
+		conns:     make(map[inet.Conn]time.Time),
+	}
+	cm.peers[p] = pi
+	return pi
 }
 
 // CMInfo holds the configuration for BasicConnMgr, as well as status data.
