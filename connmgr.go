@@ -244,6 +244,23 @@ func (cm *BasicConnMgr) UntagPeer(p peer.ID, tag string) {
 	delete(pi.tags, tag)
 }
 
+// UpsertTag is called to insert/update a peer tag
+func (cm *BasicConnMgr) UpsertTag(p peer.ID, tag string, upsert func(int) int) {
+	cm.lk.Lock()
+	defer cm.lk.Unlock()
+
+	pi, ok := cm.peers[p]
+	if !ok {
+		log.Info("tried to upsert tag from untracked peer: ", p)
+		return
+	}
+
+	oldval := pi.tags[tag]
+	newval := upsert(oldval)
+	pi.value += (newval - oldval)
+	pi.tags[tag] = newval
+}
+
 // CMInfo holds the configuration for BasicConnMgr, as well as status data.
 type CMInfo struct {
 	// The low watermark, as described in NewConnManager.
