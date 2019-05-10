@@ -25,14 +25,13 @@ var log = logging.Logger("connmgr")
 //
 // See configuration parameters in NewConnManager.
 type BasicConnMgr struct {
-	lk          sync.Mutex
 	highWater   int
 	lowWater    int
-	connCount   int
 	gracePeriod time.Duration
-	peers       map[peer.ID]*peerInfo
 
-	plk       sync.RWMutex
+	lk        sync.Mutex
+	connCount int
+	peers     map[peer.ID]*peerInfo
 	protected map[peer.ID]map[string]struct{}
 
 	// channel-based semaphore that enforces only a single trim is in progress
@@ -62,8 +61,8 @@ func NewConnManager(low, hi int, grace time.Duration) *BasicConnMgr {
 }
 
 func (cm *BasicConnMgr) Protect(id peer.ID, tag string) {
-	cm.plk.Lock()
-	defer cm.plk.Unlock()
+	cm.lk.Lock()
+	defer cm.lk.Unlock()
 
 	tags, ok := cm.protected[id]
 	if !ok {
@@ -74,8 +73,8 @@ func (cm *BasicConnMgr) Protect(id peer.ID, tag string) {
 }
 
 func (cm *BasicConnMgr) Unprotect(id peer.ID, tag string) (protected bool) {
-	cm.plk.Lock()
-	defer cm.plk.Unlock()
+	cm.lk.Lock()
+	defer cm.lk.Unlock()
 
 	tags, ok := cm.protected[id]
 	if !ok {
@@ -129,21 +128,22 @@ func (cm *BasicConnMgr) TrimOpenConns(ctx context.Context) {
 // getConnsToClose runs the heuristics described in TrimOpenConns and returns the
 // connections to close.
 func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
-	cm.lk.Lock()
-	defer cm.lk.Unlock()
-
 	if cm.lowWater == 0 || cm.highWater == 0 {
 		// disabled
 		return nil
 	}
+
 	now := time.Now()
-	if len(cm.peers) < cm.lowWater {
+	cm.lk.Lock()
+	target := len(cm.peers) - cm.lowWater
+
+	if target <= 0 {
+		cm.lk.Unlock()
 		log.Info("open connection count below limit")
 		return nil
 	}
 
-	var candidates []*peerInfo
-	cm.plk.RLock()
+	candidates := make([]*peerInfo, 0, len(cm.peers))
 	for id, inf := range cm.peers {
 		if _, ok := cm.protected[id]; ok {
 			// skip over protected peer.
@@ -151,14 +151,12 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 		}
 		candidates = append(candidates, inf)
 	}
-	cm.plk.RUnlock()
+	cm.lk.Unlock()
 
 	// Sort peers according to their value.
 	sort.Slice(candidates, func(i, j int) bool {
 		return candidates[i].value < candidates[j].value
 	})
-
-	target := len(cm.peers) - cm.lowWater
 
 	// 2x number of peers we're disconnecting from because we may have more
 	// than one connection per peer. Slightly over allocating isn't an issue
@@ -188,10 +186,10 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 // peer, nil is returned if p refers to an unknown peer.
 func (cm *BasicConnMgr) GetTagInfo(p peer.ID) *ifconnmgr.TagInfo {
 	cm.lk.Lock()
-	defer cm.lk.Unlock()
 
 	pi, ok := cm.peers[p]
 	if !ok {
+		cm.lk.Unlock()
 		return nil
 	}
 
@@ -205,6 +203,7 @@ func (cm *BasicConnMgr) GetTagInfo(p peer.ID) *ifconnmgr.TagInfo {
 	for t, v := range pi.tags {
 		out.Tags[t] = v
 	}
+
 	for c, t := range pi.conns {
 		out.Conns[c.RemoteMultiaddr().String()] = t
 	}
