@@ -40,7 +40,7 @@ func (c *tconn) RemoteMultiaddr() ma.Multiaddr {
 	return addr
 }
 
-func randConn(t *testing.T, discNotify func(inet.Network, inet.Conn)) inet.Conn {
+func randConn(t testing.TB, discNotify func(inet.Network, inet.Conn)) inet.Conn {
 	pid := tu.RandPeerIDFatal(t)
 	return &tconn{peer: pid, disconnectNotify: discNotify}
 }
