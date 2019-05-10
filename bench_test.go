@@ -32,7 +32,7 @@ func BenchmarkLockContention(b *testing.B) {
 				case <-kill:
 					return
 				default:
-					_ = cm.GetTagInfo(conns[rand.Intn(3000)].RemotePeer())
+					cm.TagPeer(conns[rand.Intn(len(conns))].RemotePeer(), "another-tag", 1)
 				}
 			}
 		}()
@@ -40,7 +40,7 @@ func BenchmarkLockContention(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		rc := conns[rand.Intn(3000)]
+		rc := conns[rand.Intn(len(conns))]
 		not.Connected(nil, rc)
 		cm.TagPeer(rc.RemotePeer(), "tag", 100)
 		cm.UntagPeer(rc.RemotePeer(), "tag")
