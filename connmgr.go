@@ -165,7 +165,7 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 	}
 	now := time.Now()
 	npeers := cm.segments.countPeers()
-	if npeers < cm.lowWater {
+	if npeers <= cm.lowWater {
 		log.Info("open connection count below limit")
 		return nil
 	}
