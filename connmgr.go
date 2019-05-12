@@ -145,12 +145,18 @@ func (cm *BasicConnMgr) TrimOpenConns(ctx context.Context) {
 		// skip this attempt to trim as the last one just took place.
 		return
 	}
+
+	// mark to stop spawning goroutines in every connection while trimming
+	cm.lastTrim = time.Now()
+
 	defer log.EventBegin(ctx, "connCleanup").Done()
 	for _, c := range cm.getConnsToClose(ctx) {
 		log.Info("closing conn: ", c.RemotePeer())
 		log.Event(ctx, "closeConn", c.RemotePeer())
 		c.Close()
 	}
+
+	// we just finished, set the trim time
 	cm.lastTrim = time.Now()
 }
 
@@ -168,7 +174,7 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 		return nil
 	}
 
-	var candidates []*peerInfo
+	candidates := make([]*peerInfo, 0, npeers)
 	cm.plk.RLock()
 	for _, s := range cm.segments {
 		s.Lock()
@@ -201,9 +207,13 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 			continue
 		}
 
+		// lock this to protect from concurrent modifications from connect/disconnect events
+		s := cm.segments.get(inf.id)
+		s.Lock()
 		for c := range inf.conns {
 			selected = append(selected, c)
 		}
+		s.Unlock()
 
 		target--
 		if target == 0 {
@@ -351,6 +361,7 @@ func (nn *cmNotifee) Connected(n inet.Network, c inet.Conn) {
 	pinfo, ok := s.peers[p]
 	if !ok {
 		pinfo = &peerInfo{
+			id:        p,
 			firstSeen: time.Now(),
 			tags:      make(map[string]int),
 			conns:     make(map[inet.Conn]time.Time),
@@ -367,7 +378,7 @@ func (nn *cmNotifee) Connected(n inet.Network, c inet.Conn) {
 	pinfo.conns[c] = time.Now()
 	connCount := atomic.AddInt32(&cm.connCount, 1)
 
-	if int(connCount) > nn.highWater {
+	if int(connCount) > nn.highWater && time.Since(cm.lastTrim) > cm.silencePeriod {
 		go cm.TrimOpenConns(context.Background())
 	}
 }
