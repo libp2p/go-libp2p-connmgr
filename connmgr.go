@@ -146,9 +146,6 @@ func (cm *BasicConnMgr) TrimOpenConns(ctx context.Context) {
 		return
 	}
 
-	// mark to stop spawning goroutines in every connection while trimming
-	cm.lastTrim = time.Now()
-
 	defer log.EventBegin(ctx, "connCleanup").Done()
 	for _, c := range cm.getConnsToClose(ctx) {
 		log.Info("closing conn: ", c.RemotePeer())
@@ -156,7 +153,6 @@ func (cm *BasicConnMgr) TrimOpenConns(ctx context.Context) {
 		c.Close()
 	}
 
-	// we just finished, set the trim time
 	cm.lastTrim = time.Now()
 }
 
@@ -378,7 +374,7 @@ func (nn *cmNotifee) Connected(n inet.Network, c inet.Conn) {
 	pinfo.conns[c] = time.Now()
 	connCount := atomic.AddInt32(&cm.connCount, 1)
 
-	if int(connCount) > nn.highWater && time.Since(cm.lastTrim) > cm.silencePeriod {
+	if int(connCount) > nn.highWater {
 		go cm.TrimOpenConns(context.Background())
 	}
 }
