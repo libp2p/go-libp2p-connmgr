@@ -369,8 +369,7 @@ func TestPeerProtectionSingleTag(t *testing.T) {
 	// add one more connection, sending the connection manager overboard.
 	not.Connected(nil, randConn(t, not.Disconnected))
 
-	// the pruning happens in the background -- this timing condition is not good.
-	time.Sleep(1 * time.Second)
+	cm.TrimOpenConns(context.Background())
 
 	for _, c := range protected {
 		if c.(*tconn).closed {
@@ -389,8 +388,7 @@ func TestPeerProtectionSingleTag(t *testing.T) {
 		cm.TagPeer(rc.RemotePeer(), "test", 20)
 	}
 
-	// the pruning happens in the background -- this timing condition is not good.
-	time.Sleep(1 * time.Second)
+	cm.TrimOpenConns(context.Background())
 
 	if !protected[0].(*tconn).closed {
 		t.Error("unprotected connection was kept open by connection manager")
@@ -435,8 +433,7 @@ func TestPeerProtectionMultipleTags(t *testing.T) {
 	// add one more connection, sending the connection manager overboard.
 	not.Connected(nil, randConn(t, not.Disconnected))
 
-	// the pruning happens in the background -- this timing condition is not good.
-	time.Sleep(1 * time.Second)
+	cm.TrimOpenConns(context.Background())
 
 	for _, c := range protected {
 		if c.(*tconn).closed {
@@ -459,8 +456,7 @@ func TestPeerProtectionMultipleTags(t *testing.T) {
 		cm.TagPeer(rc.RemotePeer(), "test", 20)
 	}
 
-	// the pruning happens in the background -- this timing condition is not good.
-	time.Sleep(1 * time.Second)
+	cm.TrimOpenConns(context.Background())
 
 	// connections should still remain open, as they were protected.
 	for _, c := range protected[0:] {
@@ -480,8 +476,7 @@ func TestPeerProtectionMultipleTags(t *testing.T) {
 		cm.TagPeer(rc.RemotePeer(), "test", 20)
 	}
 
-	// the pruning happens in the background -- this timing condition is not good.
-	time.Sleep(1 * time.Second)
+	cm.TrimOpenConns(context.Background())
 
 	if !protected[0].(*tconn).closed {
 		t.Error("unprotected connection was kept open by connection manager")
