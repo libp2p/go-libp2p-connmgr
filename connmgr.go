@@ -39,6 +39,9 @@ type BasicConnMgr struct {
 	trimRunningCh chan struct{}
 	lastTrim      time.Time
 	silencePeriod time.Duration
+
+	ctx    context.Context
+	cancel func()
 }
 
 var _ ifconnmgr.ConnManager = (*BasicConnMgr)(nil)
@@ -71,13 +74,16 @@ func (s *segments) countPeers() (count int) {
 // * grace is the amount of time a newly opened connection is given before it becomes
 //   subject to pruning.
 func NewConnManager(low, hi int, grace time.Duration) *BasicConnMgr {
-	return &BasicConnMgr{
+	ctx, cancel := context.WithCancel(context.Background())
+	cm := &BasicConnMgr{
 		highWater:     hi,
 		lowWater:      low,
 		gracePeriod:   grace,
 		trimRunningCh: make(chan struct{}, 1),
 		protected:     make(map[peer.ID]map[string]struct{}, 16),
 		silencePeriod: SilencePeriod,
+		ctx:           ctx,
+		cancel:        cancel,
 		segments: func() (ret segments) {
 			for i := range ret {
 				ret[i] = &segment{
@@ -87,6 +93,14 @@ func NewConnManager(low, hi int, grace time.Duration) *BasicConnMgr {
 			return ret
 		}(),
 	}
+
+	go cm.background()
+	return cm
+}
+
+func (cm *BasicConnMgr) Close() error {
+	cm.cancel()
+	return nil
 }
 
 func (cm *BasicConnMgr) Protect(id peer.ID, tag string) {
@@ -154,6 +168,23 @@ func (cm *BasicConnMgr) TrimOpenConns(ctx context.Context) {
 	}
 
 	cm.lastTrim = time.Now()
+}
+
+func (cm *BasicConnMgr) background() {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if atomic.LoadInt32(&cm.connCount) > int32(cm.highWater) {
+				cm.TrimOpenConns(cm.ctx)
+			}
+
+		case <-cm.ctx.Done():
+			return
+		}
+	}
 }
 
 // getConnsToClose runs the heuristics described in TrimOpenConns and returns the
@@ -372,11 +403,7 @@ func (nn *cmNotifee) Connected(n inet.Network, c inet.Conn) {
 	}
 
 	pinfo.conns[c] = time.Now()
-	connCount := atomic.AddInt32(&cm.connCount, 1)
-
-	if int(connCount) > nn.highWater {
-		go cm.TrimOpenConns(context.Background())
-	}
+	atomic.AddInt32(&cm.connCount, 1)
 }
 
 // Disconnected is called by notifiers to inform that an existing connection has been closed or terminated.
