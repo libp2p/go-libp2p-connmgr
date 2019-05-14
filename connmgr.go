@@ -395,7 +395,7 @@ func (nn *cmNotifee) Connected(n inet.Network, c inet.Conn) {
 		s.peers[p] = pinfo
 	} else {
 		// duplicate connection! log it loudly.
-		log.Errorf("duplicate connection from %s; time since first connection: %s", p, time.Now().Sub(pinfo.firstSeen))
+		log.Errorf("duplicate connection from %s; time since first connection: %s direction: %d", p, time.Now().Sub(pinfo.firstSeen), c.Stat().Direction)
 	}
 
 	_, ok = pinfo.conns[c]
