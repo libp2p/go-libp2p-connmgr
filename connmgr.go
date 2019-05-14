@@ -243,7 +243,7 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 
 		// abnormal condition check
 		if len(inf.conns) != 1 {
-			addrs := make([]ma.Multiaddr, len(inf.conns))
+			addrs := make([]ma.Multiaddr, 0, len(inf.conns))
 			for c := range inf.conns {
 				addrs = append(addrs, c.RemoteMultiaddr())
 			}
