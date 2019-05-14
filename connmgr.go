@@ -240,6 +240,16 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 			selected = append(selected, c)
 		}
 		target -= len(inf.conns)
+
+		// abnormal condition check
+		if len(inf.conns) != 1 {
+			addrs := make([]ma.Multiaddr, len(inf.conns))
+			for c := range inf.conns {
+				addrs = append(addrs, c.RemoteMultiaddr())
+			}
+			log.Errorf("peer has abnormal number of conns: %d [%v]", len(inf.conns), addrs)
+		}
+
 		s.Unlock()
 
 		if target <= 0 {
