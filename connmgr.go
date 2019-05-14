@@ -240,24 +240,12 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 			selected = append(selected, c)
 		}
 		target -= len(inf.conns)
-
-		// abnormal condition check
-		if len(inf.conns) != 1 {
-			addrs := make([]ma.Multiaddr, 0, len(inf.conns))
-			for c := range inf.conns {
-				addrs = append(addrs, c.RemoteMultiaddr())
-			}
-			log.Errorf("peer has abnormal number of conns: %d %v", len(inf.conns), addrs)
-		}
-
 		s.Unlock()
 
 		if target <= 0 {
 			break
 		}
 	}
-
-	log.Errorf("selected %d conns for trimming; target: %d", len(selected), nconns-cm.lowWater)
 
 	return selected
 }
@@ -405,6 +393,9 @@ func (nn *cmNotifee) Connected(n inet.Network, c inet.Conn) {
 			conns:     make(map[inet.Conn]time.Time),
 		}
 		s.peers[p] = pinfo
+	} else {
+		// duplicate connection! log it loudly.
+		log.Errorf("duplicate connection from %s; time since first connection: %s", p, time.Now().Sub(pinfo.firstSeen))
 	}
 
 	_, ok = pinfo.conns[c]
