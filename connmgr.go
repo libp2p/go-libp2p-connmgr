@@ -194,12 +194,13 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 		return nil
 	}
 	now := time.Now()
-	npeers := cm.segments.countPeers()
-	if npeers <= cm.lowWater {
+	nconns := int(atomic.LoadInt32(&cm.connCount))
+	if nconns <= cm.lowWater {
 		log.Info("open connection count below limit")
 		return nil
 	}
 
+	npeers := cm.segments.countPeers()
 	candidates := make([]*peerInfo, 0, npeers)
 	cm.plk.RLock()
 	for _, s := range cm.segments {
@@ -220,12 +221,10 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 		return candidates[i].value < candidates[j].value
 	})
 
-	target := npeers - cm.lowWater
+	target := nconns - cm.lowWater
 
-	// 2x number of peers we're disconnecting from because we may have more
-	// than one connection per peer. Slightly over allocating isn't an issue
-	// as this is a very short-lived array.
-	selected := make([]inet.Conn, 0, target*2)
+	// slightly overallocate because we may have more than one conns per peer
+	selected := make([]inet.Conn, 0, target+10)
 
 	for _, inf := range candidates {
 		// TODO: should we be using firstSeen or the time associated with the connection itself?
@@ -239,10 +238,10 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 		for c := range inf.conns {
 			selected = append(selected, c)
 		}
+		target -= len(inf.conns)
 		s.Unlock()
 
-		target--
-		if target == 0 {
+		if target <= 0 {
 			break
 		}
 	}
