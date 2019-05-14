@@ -247,6 +247,8 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 		}
 	}
 
+	log.Errorf("selected %d conns for trimming; target: %d", len(selected), nconns-cm.lowWater)
+
 	return selected
 }
 
