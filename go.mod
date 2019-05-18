@@ -1,6 +1,7 @@
 module github.com/libp2p/go-libp2p-connmgr
 
 require (
+	github.com/ipfs/go-detect-race v0.0.1
 	github.com/ipfs/go-log v0.0.1
 	github.com/libp2p/go-libp2p-interface-connmgr v0.0.4
 	github.com/libp2p/go-libp2p-net v0.0.1
