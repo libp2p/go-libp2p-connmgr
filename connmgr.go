@@ -238,16 +238,10 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 	sort.Slice(candidates, func(i, j int) bool {
 		left, right := candidates[i], candidates[j]
 		// temporary peers are preferred for pruning.
-		if left.temp {
-			if right.temp {
-				goto Values
-			}
-			return true
+		if left.temp != right.temp {
+			return left.temp
 		}
-		if right.temp {
-			return false
-		}
-	Values:
+		// otherwise, compare by value.
 		return left.value < right.value
 	})
 
