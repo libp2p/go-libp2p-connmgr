@@ -190,8 +190,8 @@ func TestTagPeerNonExistant(t *testing.T) {
 	id := tu.RandPeerIDFatal(t)
 	cm.TagPeer(id, "test", 1)
 
-	if cm.segments.countPeers() != 0 {
-		t.Fatal("expected zero peers")
+	if !cm.segments.get(id).peers[id].temp {
+		t.Fatal("expected 1 temporary entry")
 	}
 }
 
@@ -525,9 +525,9 @@ func TestUpsertTag(t *testing.T) {
 	cm := NewConnManager(1, 1, time.Duration(10*time.Minute))
 	not := cm.Notifee()
 	conn := randConn(t, nil)
-	not.Connected(nil, conn)
 	rp := conn.RemotePeer()
 
+	// this is an early tag, before the Connected notification arrived.
 	cm.UpsertTag(rp, "tag", func(v int) int { return v + 1 })
 	if len(cm.segments.get(rp).peers[rp].tags) != 1 {
 		t.Fatal("expected a tag")
@@ -535,6 +535,9 @@ func TestUpsertTag(t *testing.T) {
 	if cm.segments.get(rp).peers[rp].value != 1 {
 		t.Fatal("expected a tag value of 1")
 	}
+
+	// now let's notify the connection.
+	not.Connected(nil, conn)
 
 	cm.UpsertTag(rp, "tag", func(v int) int { return v + 1 })
 	if len(cm.segments.get(rp).peers[rp].tags) != 1 {
@@ -550,5 +553,46 @@ func TestUpsertTag(t *testing.T) {
 	}
 	if cm.segments.get(rp).peers[rp].value != 1 {
 		t.Fatal("expected a tag value of 1")
+	}
+}
+
+func TestTemporaryEntriesClearedFirst(t *testing.T) {
+	cm := NewConnManager(1, 1, 0)
+
+	id := tu.RandPeerIDFatal(t)
+	cm.TagPeer(id, "test", 20)
+
+	if cm.GetTagInfo(id).Value != 20 {
+		t.Fatal("expected an early tag with value 20")
+	}
+
+	not := cm.Notifee()
+	conn1, conn2 := randConn(t, nil), randConn(t, nil)
+	not.Connected(nil, conn1)
+	not.Connected(nil, conn2)
+
+	cm.TrimOpenConns(context.Background())
+	if cm.GetTagInfo(id) != nil {
+		t.Fatal("expected no temporary tags after trimming")
+	}
+}
+
+func TestTemporaryEntryConvertedOnConnection(t *testing.T) {
+	cm := NewConnManager(1, 1, 0)
+
+	conn := randConn(t, nil)
+	cm.TagPeer(conn.RemotePeer(), "test", 20)
+
+	ti := cm.segments.get(conn.RemotePeer()).peers[conn.RemotePeer()]
+
+	if ti.value != 20 || !ti.temp {
+		t.Fatal("expected a temporary tag with value 20")
+	}
+
+	not := cm.Notifee()
+	not.Connected(nil, conn)
+
+	if ti.value != 20 || ti.temp {
+		t.Fatal("expected a non-temporary tag with value 20")
 	}
 }

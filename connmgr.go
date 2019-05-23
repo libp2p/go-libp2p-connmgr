@@ -53,17 +53,34 @@ type segment struct {
 
 type segments [256]*segment
 
-func (s *segments) get(p peer.ID) *segment {
-	return s[byte(p[len(p)-1])]
+func (ss *segments) get(p peer.ID) *segment {
+	return ss[byte(p[len(p)-1])]
 }
 
-func (s *segments) countPeers() (count int) {
-	for _, seg := range s {
+func (ss *segments) countPeers() (count int) {
+	for _, seg := range ss {
 		seg.Lock()
 		count += len(seg.peers)
 		seg.Unlock()
 	}
 	return count
+}
+
+func (s *segment) tagInfoFor(p peer.ID) *peerInfo {
+	pi, ok := s.peers[p]
+	if ok {
+		return pi
+	}
+	// create a temporary peer to buffer early tags before the Connected notification arrives.
+	pi = &peerInfo{
+		id:        p,
+		firstSeen: time.Now(), // this timestamp will be updated when the first Connected notification arrives.
+		temp:      true,
+		tags:      make(map[string]int),
+		conns:     make(map[inet.Conn]time.Time),
+	}
+	s.peers[p] = pi
+	return pi
 }
 
 // NewConnManager creates a new BasicConnMgr with the provided params:
@@ -134,6 +151,7 @@ type peerInfo struct {
 	id    peer.ID
 	tags  map[string]int // value for each tag
 	value int            // cached sum of all tag values
+	temp  bool           // this is a temporary entry holding early tags, and awaiting connections
 
 	conns map[inet.Conn]time.Time // start time of each connection
 
@@ -218,7 +236,13 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 
 	// Sort peers according to their value.
 	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].value < candidates[j].value
+		left, right := candidates[i], candidates[j]
+		// temporary peers are preferred for pruning.
+		if left.temp != right.temp {
+			return left.temp
+		}
+		// otherwise, compare by value.
+		return left.value < right.value
 	})
 
 	target := nconns - cm.lowWater
@@ -227,6 +251,9 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 	selected := make([]inet.Conn, 0, target+10)
 
 	for _, inf := range candidates {
+		if target <= 0 {
+			break
+		}
 		// TODO: should we be using firstSeen or the time associated with the connection itself?
 		if inf.firstSeen.Add(cm.gracePeriod).After(now) {
 			continue
@@ -235,15 +262,18 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 		// lock this to protect from concurrent modifications from connect/disconnect events
 		s := cm.segments.get(inf.id)
 		s.Lock()
-		for c := range inf.conns {
-			selected = append(selected, c)
+
+		if len(inf.conns) == 0 && inf.temp {
+			// handle temporary entries for early tags -- this entry has gone past the grace period
+			// and still holds no connections, so prune it.
+			delete(s.peers, inf.id)
+		} else {
+			for c := range inf.conns {
+				selected = append(selected, c)
+			}
 		}
 		target -= len(inf.conns)
 		s.Unlock()
-
-		if target <= 0 {
-			break
-		}
 	}
 
 	return selected
@@ -284,14 +314,10 @@ func (cm *BasicConnMgr) TagPeer(p peer.ID, tag string, val int) {
 	s.Lock()
 	defer s.Unlock()
 
-	pi, ok := s.peers[p]
-	if !ok {
-		log.Info("tried to tag conn from untracked peer: ", p)
-		return
-	}
+	pi := s.tagInfoFor(p)
 
 	// Update the total value of the peer.
-	pi.value += (val - pi.tags[tag])
+	pi.value += val - pi.tags[tag]
 	pi.tags[tag] = val
 }
 
@@ -318,15 +344,11 @@ func (cm *BasicConnMgr) UpsertTag(p peer.ID, tag string, upsert func(int) int) {
 	s.Lock()
 	defer s.Unlock()
 
-	pi, ok := s.peers[p]
-	if !ok {
-		log.Info("tried to upsert tag from untracked peer: ", p)
-		return
-	}
+	pi := s.tagInfoFor(p)
 
 	oldval := pi.tags[tag]
 	newval := upsert(oldval)
-	pi.value += (newval - oldval)
+	pi.value += newval - oldval
 	pi.tags[tag] = newval
 }
 
@@ -383,15 +405,22 @@ func (nn *cmNotifee) Connected(n inet.Network, c inet.Conn) {
 	s.Lock()
 	defer s.Unlock()
 
-	pinfo, ok := s.peers[p]
+	id := c.RemotePeer()
+	pinfo, ok := s.peers[id]
 	if !ok {
 		pinfo = &peerInfo{
-			id:        p,
+			id:        id,
 			firstSeen: time.Now(),
 			tags:      make(map[string]int),
 			conns:     make(map[inet.Conn]time.Time),
 		}
-		s.peers[p] = pinfo
+		s.peers[id] = pinfo
+	} else if pinfo.temp {
+		// we had created a temporary entry for this peer to buffer early tags before the
+		// Connected notification arrived: flip the temporary flag, and update the firstSeen
+		// timestamp to the real one.
+		pinfo.temp = false
+		pinfo.firstSeen = time.Now()
 	}
 
 	_, ok = pinfo.conns[c]
