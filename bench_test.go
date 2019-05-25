@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	network "github.com/libp2p/go-libp2p-core/network"
+	"github.com/libp2p/go-libp2p-core/network"
 )
 
 func randomConns(tb testing.TB) (c [5000]network.Conn) {
