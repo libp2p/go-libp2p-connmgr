@@ -5,10 +5,10 @@ import (
 	"sync"
 	"testing"
 
-	inet "github.com/libp2p/go-libp2p-net"
+	"github.com/libp2p/go-libp2p-core/network"
 )
 
-func randomConns(tb testing.TB) (c [5000]inet.Conn) {
+func randomConns(tb testing.TB) (c [5000]network.Conn) {
 	for i, _ := range c {
 		c[i] = randConn(tb, nil)
 	}

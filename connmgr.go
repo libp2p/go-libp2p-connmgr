@@ -7,10 +7,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/libp2p/go-libp2p-core/connmgr"
+	"github.com/libp2p/go-libp2p-core/network"
+	"github.com/libp2p/go-libp2p-core/peer"
+
 	logging "github.com/ipfs/go-log"
-	ifconnmgr "github.com/libp2p/go-libp2p-interface-connmgr"
-	inet "github.com/libp2p/go-libp2p-net"
-	peer "github.com/libp2p/go-libp2p-peer"
 	ma "github.com/multiformats/go-multiaddr"
 )
 
@@ -44,7 +45,7 @@ type BasicConnMgr struct {
 	cancel func()
 }
 
-var _ ifconnmgr.ConnManager = (*BasicConnMgr)(nil)
+var _ connmgr.ConnManager = (*BasicConnMgr)(nil)
 
 type segment struct {
 	sync.Mutex
@@ -77,7 +78,7 @@ func (s *segment) tagInfoFor(p peer.ID) *peerInfo {
 		firstSeen: time.Now(), // this timestamp will be updated when the first Connected notification arrives.
 		temp:      true,
 		tags:      make(map[string]int),
-		conns:     make(map[inet.Conn]time.Time),
+		conns:     make(map[network.Conn]time.Time),
 	}
 	s.peers[p] = pi
 	return pi
@@ -153,7 +154,7 @@ type peerInfo struct {
 	value int            // cached sum of all tag values
 	temp  bool           // this is a temporary entry holding early tags, and awaiting connections
 
-	conns map[inet.Conn]time.Time // start time of each connection
+	conns map[network.Conn]time.Time // start time of each connection
 
 	firstSeen time.Time // timestamp when we began tracking this peer.
 }
@@ -206,7 +207,7 @@ func (cm *BasicConnMgr) background() {
 
 // getConnsToClose runs the heuristics described in TrimOpenConns and returns the
 // connections to close.
-func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
+func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []network.Conn {
 	if cm.lowWater == 0 || cm.highWater == 0 {
 		// disabled
 		return nil
@@ -248,7 +249,7 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 	target := nconns - cm.lowWater
 
 	// slightly overallocate because we may have more than one conns per peer
-	selected := make([]inet.Conn, 0, target+10)
+	selected := make([]network.Conn, 0, target+10)
 
 	for _, inf := range candidates {
 		if target <= 0 {
@@ -281,7 +282,7 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []inet.Conn {
 
 // GetTagInfo is called to fetch the tag information associated with a given
 // peer, nil is returned if p refers to an unknown peer.
-func (cm *BasicConnMgr) GetTagInfo(p peer.ID) *ifconnmgr.TagInfo {
+func (cm *BasicConnMgr) GetTagInfo(p peer.ID) *connmgr.TagInfo {
 	s := cm.segments.get(p)
 	s.Lock()
 	defer s.Unlock()
@@ -291,7 +292,7 @@ func (cm *BasicConnMgr) GetTagInfo(p peer.ID) *ifconnmgr.TagInfo {
 		return nil
 	}
 
-	out := &ifconnmgr.TagInfo{
+	out := &connmgr.TagInfo{
 		FirstSeen: pi.firstSeen,
 		Value:     pi.value,
 		Tags:      make(map[string]int),
@@ -384,7 +385,7 @@ func (cm *BasicConnMgr) GetInfo() CMInfo {
 // Notifee returns a sink through which Notifiers can inform the BasicConnMgr when
 // events occur. Currently, the notifee only reacts upon connection events
 // {Connected, Disconnected}.
-func (cm *BasicConnMgr) Notifee() inet.Notifiee {
+func (cm *BasicConnMgr) Notifee() network.Notifiee {
 	return (*cmNotifee)(cm)
 }
 
@@ -397,7 +398,7 @@ func (nn *cmNotifee) cm() *BasicConnMgr {
 // Connected is called by notifiers to inform that a new connection has been established.
 // The notifee updates the BasicConnMgr to start tracking the connection. If the new connection
 // count exceeds the high watermark, a trim may be triggered.
-func (nn *cmNotifee) Connected(n inet.Network, c inet.Conn) {
+func (nn *cmNotifee) Connected(n network.Network, c network.Conn) {
 	cm := nn.cm()
 
 	p := c.RemotePeer()
@@ -412,7 +413,7 @@ func (nn *cmNotifee) Connected(n inet.Network, c inet.Conn) {
 			id:        id,
 			firstSeen: time.Now(),
 			tags:      make(map[string]int),
-			conns:     make(map[inet.Conn]time.Time),
+			conns:     make(map[network.Conn]time.Time),
 		}
 		s.peers[id] = pinfo
 	} else if pinfo.temp {
@@ -435,7 +436,7 @@ func (nn *cmNotifee) Connected(n inet.Network, c inet.Conn) {
 
 // Disconnected is called by notifiers to inform that an existing connection has been closed or terminated.
 // The notifee updates the BasicConnMgr accordingly to stop tracking the connection, and performs housekeeping.
-func (nn *cmNotifee) Disconnected(n inet.Network, c inet.Conn) {
+func (nn *cmNotifee) Disconnected(n network.Network, c network.Conn) {
 	cm := nn.cm()
 
 	p := c.RemotePeer()
@@ -463,13 +464,13 @@ func (nn *cmNotifee) Disconnected(n inet.Network, c inet.Conn) {
 }
 
 // Listen is no-op in this implementation.
-func (nn *cmNotifee) Listen(n inet.Network, addr ma.Multiaddr) {}
+func (nn *cmNotifee) Listen(n network.Network, addr ma.Multiaddr) {}
 
 // ListenClose is no-op in this implementation.
-func (nn *cmNotifee) ListenClose(n inet.Network, addr ma.Multiaddr) {}
+func (nn *cmNotifee) ListenClose(n network.Network, addr ma.Multiaddr) {}
 
 // OpenedStream is no-op in this implementation.
-func (nn *cmNotifee) OpenedStream(inet.Network, inet.Stream) {}
+func (nn *cmNotifee) OpenedStream(network.Network, network.Stream) {}
 
 // ClosedStream is no-op in this implementation.
-func (nn *cmNotifee) ClosedStream(inet.Network, inet.Stream) {}
+func (nn *cmNotifee) ClosedStream(network.Network, network.Stream) {}

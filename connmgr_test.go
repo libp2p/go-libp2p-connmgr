@@ -6,18 +6,20 @@ import (
 	"time"
 
 	detectrace "github.com/ipfs/go-detect-race"
-	inet "github.com/libp2p/go-libp2p-net"
-	peer "github.com/libp2p/go-libp2p-peer"
-	tu "github.com/libp2p/go-testutil"
+
+	"github.com/libp2p/go-libp2p-core/network"
+	"github.com/libp2p/go-libp2p-core/peer"
+
+	tu "github.com/libp2p/go-libp2p-core/test"
 	ma "github.com/multiformats/go-multiaddr"
 )
 
 type tconn struct {
-	inet.Conn
+	network.Conn
 
 	peer             peer.ID
 	closed           bool
-	disconnectNotify func(net inet.Network, conn inet.Conn)
+	disconnectNotify func(net network.Network, conn network.Conn)
 }
 
 func (c *tconn) Close() error {
@@ -40,7 +42,7 @@ func (c *tconn) RemoteMultiaddr() ma.Multiaddr {
 	return addr
 }
 
-func randConn(t testing.TB, discNotify func(inet.Network, inet.Conn)) inet.Conn {
+func randConn(t testing.TB, discNotify func(network.Network, network.Conn)) network.Conn {
 	pid := tu.RandPeerIDFatal(t)
 	return &tconn{peer: pid, disconnectNotify: discNotify}
 }
@@ -49,7 +51,7 @@ func TestConnTrimming(t *testing.T) {
 	cm := NewConnManager(200, 300, 0)
 	not := cm.Notifee()
 
-	var conns []inet.Conn
+	var conns []network.Conn
 	for i := 0; i < 300; i++ {
 		rc := randConn(t, nil)
 		conns = append(conns, rc)
@@ -310,7 +312,7 @@ func TestQuickBurstRespectsSilencePeriod(t *testing.T) {
 	cm := NewConnManager(10, 20, 0)
 	not := cm.Notifee()
 
-	var conns []inet.Conn
+	var conns []network.Conn
 
 	// quickly produce 30 connections (sending us above the high watermark)
 	for i := 0; i < 30; i++ {
@@ -349,7 +351,7 @@ func TestPeerProtectionSingleTag(t *testing.T) {
 	not := cm.Notifee()
 
 	// produce 20 connections with unique peers.
-	var conns []inet.Conn
+	var conns []network.Conn
 	for i := 0; i < 20; i++ {
 		rc := randConn(t, not.Disconnected)
 		conns = append(conns, rc)
@@ -358,7 +360,7 @@ func TestPeerProtectionSingleTag(t *testing.T) {
 	}
 
 	// protect the first 5 peers.
-	var protected []inet.Conn
+	var protected []network.Conn
 	for _, c := range conns[0:5] {
 		cm.Protect(c.RemotePeer(), "global")
 		protected = append(protected, c)
@@ -412,7 +414,7 @@ func TestPeerProtectionMultipleTags(t *testing.T) {
 	not := cm.Notifee()
 
 	// produce 20 connections with unique peers.
-	var conns []inet.Conn
+	var conns []network.Conn
 	for i := 0; i < 20; i++ {
 		rc := randConn(t, not.Disconnected)
 		conns = append(conns, rc)
@@ -421,7 +423,7 @@ func TestPeerProtectionMultipleTags(t *testing.T) {
 	}
 
 	// protect the first 5 peers under two tags.
-	var protected []inet.Conn
+	var protected []network.Conn
 	for _, c := range conns[0:5] {
 		cm.Protect(c.RemotePeer(), "tag1")
 		cm.Protect(c.RemotePeer(), "tag2")
