@@ -1,6 +1,7 @@
 package connmgr
 
 import (
+	"context"
 	"math/rand"
 	"sync"
 	"testing"
@@ -16,17 +17,20 @@ func randomConns(tb testing.TB) (c [5000]network.Conn) {
 }
 
 func BenchmarkLockContention(b *testing.B) {
+	wg := &sync.WaitGroup{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	conns := randomConns(b)
-	cm := NewConnManager(1000, 1000, 0)
+	cm := NewConnManager(ctx, wg, 1000, 1000, 0)
 	not := cm.Notifee()
 
 	kill := make(chan struct{})
-	var wg sync.WaitGroup
+	var wg1 sync.WaitGroup
 
 	for i := 0; i < 16; i++ {
-		wg.Add(1)
+		wg1.Add(1)
 		go func() {
-			defer wg.Done()
+			defer wg1.Done()
 			for {
 				select {
 				case <-kill:

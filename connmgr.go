@@ -41,8 +41,7 @@ type BasicConnMgr struct {
 	lastTrim      time.Time
 	silencePeriod time.Duration
 
-	ctx    context.Context
-	cancel func()
+	ctx context.Context
 }
 
 var _ connmgr.ConnManager = (*BasicConnMgr)(nil)
@@ -90,8 +89,7 @@ func (s *segment) tagInfoFor(p peer.ID) *peerInfo {
 //   their connections terminated) until 'low watermark' peers remain.
 // * grace is the amount of time a newly opened connection is given before it becomes
 //   subject to pruning.
-func NewConnManager(low, hi int, grace time.Duration) *BasicConnMgr {
-	ctx, cancel := context.WithCancel(context.Background())
+func NewConnManager(ctx context.Context, wg *sync.WaitGroup, low, hi int, grace time.Duration) *BasicConnMgr {
 	cm := &BasicConnMgr{
 		highWater:     hi,
 		lowWater:      low,
@@ -100,7 +98,6 @@ func NewConnManager(low, hi int, grace time.Duration) *BasicConnMgr {
 		protected:     make(map[peer.ID]map[string]struct{}, 16),
 		silencePeriod: SilencePeriod,
 		ctx:           ctx,
-		cancel:        cancel,
 		segments: func() (ret segments) {
 			for i := range ret {
 				ret[i] = &segment{
@@ -110,13 +107,12 @@ func NewConnManager(low, hi int, grace time.Duration) *BasicConnMgr {
 			return ret
 		}(),
 	}
-
-	go cm.background()
+	wg.Add(1)
+	go cm.background(wg)
 	return cm
 }
 
 func (cm *BasicConnMgr) Close() error {
-	cm.cancel()
 	return nil
 }
 
@@ -188,10 +184,10 @@ func (cm *BasicConnMgr) TrimOpenConns(ctx context.Context) {
 	cm.lastTrim = time.Now()
 }
 
-func (cm *BasicConnMgr) background() {
+func (cm *BasicConnMgr) background(wg *sync.WaitGroup) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
-
+	defer wg.Done()
 	for {
 		select {
 		case <-ticker.C:

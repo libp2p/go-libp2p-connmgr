@@ -2,6 +2,7 @@ package connmgr
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -48,7 +49,10 @@ func randConn(t testing.TB, discNotify func(network.Network, network.Conn)) netw
 }
 
 func TestConnTrimming(t *testing.T) {
-	cm := NewConnManager(200, 300, 0)
+	wg := &sync.WaitGroup{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cm := NewConnManager(ctx, wg, 200, 300, 0)
 	not := cm.Notifee()
 
 	var conns []network.Conn
@@ -85,25 +89,28 @@ func TestConnTrimming(t *testing.T) {
 }
 
 func TestConnsToClose(t *testing.T) {
-	cm := NewConnManager(0, 10, 0)
+	wg := &sync.WaitGroup{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cm := NewConnManager(ctx, wg, 0, 10, 0)
 	conns := cm.getConnsToClose(context.Background())
 	if conns != nil {
 		t.Fatal("expected no connections")
 	}
 
-	cm = NewConnManager(10, 0, 0)
+	cm = NewConnManager(ctx, wg, 10, 0, 0)
 	conns = cm.getConnsToClose(context.Background())
 	if conns != nil {
 		t.Fatal("expected no connections")
 	}
 
-	cm = NewConnManager(1, 1, 0)
+	cm = NewConnManager(ctx, wg, 1, 1, 0)
 	conns = cm.getConnsToClose(context.Background())
 	if conns != nil {
 		t.Fatal("expected no connections")
 	}
 
-	cm = NewConnManager(1, 1, time.Duration(10*time.Minute))
+	cm = NewConnManager(ctx, wg, 1, 1, time.Duration(10*time.Minute))
 	not := cm.Notifee()
 	for i := 0; i < 5; i++ {
 		conn := randConn(t, nil)
@@ -116,8 +123,11 @@ func TestConnsToClose(t *testing.T) {
 }
 
 func TestGetTagInfo(t *testing.T) {
+	wg := &sync.WaitGroup{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	start := time.Now()
-	cm := NewConnManager(1, 1, time.Duration(10*time.Minute))
+	cm := NewConnManager(ctx, wg, 1, 1, time.Duration(10*time.Minute))
 	not := cm.Notifee()
 	conn := randConn(t, nil)
 	not.Connected(nil, conn)
@@ -187,7 +197,10 @@ func TestGetTagInfo(t *testing.T) {
 }
 
 func TestTagPeerNonExistant(t *testing.T) {
-	cm := NewConnManager(1, 1, time.Duration(10*time.Minute))
+	wg := &sync.WaitGroup{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cm := NewConnManager(ctx, wg, 1, 1, time.Duration(10*time.Minute))
 
 	id := tu.RandPeerIDFatal(t)
 	cm.TagPeer(id, "test", 1)
@@ -198,7 +211,10 @@ func TestTagPeerNonExistant(t *testing.T) {
 }
 
 func TestUntagPeer(t *testing.T) {
-	cm := NewConnManager(1, 1, time.Duration(10*time.Minute))
+	wg := &sync.WaitGroup{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cm := NewConnManager(ctx, wg, 1, 1, time.Duration(10*time.Minute))
 	not := cm.Notifee()
 	conn := randConn(t, nil)
 	not.Connected(nil, conn)
@@ -227,9 +243,12 @@ func TestUntagPeer(t *testing.T) {
 }
 
 func TestGetInfo(t *testing.T) {
+	wg := &sync.WaitGroup{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	start := time.Now()
 	gp := time.Duration(10 * time.Minute)
-	cm := NewConnManager(1, 5, gp)
+	cm := NewConnManager(ctx, wg, 1, 5, gp)
 	not := cm.Notifee()
 	conn := randConn(t, nil)
 	not.Connected(nil, conn)
@@ -255,8 +274,11 @@ func TestGetInfo(t *testing.T) {
 }
 
 func TestDoubleConnection(t *testing.T) {
+	wg := &sync.WaitGroup{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	gp := time.Duration(10 * time.Minute)
-	cm := NewConnManager(1, 5, gp)
+	cm := NewConnManager(ctx, wg, 1, 5, gp)
 	not := cm.Notifee()
 	conn := randConn(t, nil)
 	not.Connected(nil, conn)
@@ -271,8 +293,11 @@ func TestDoubleConnection(t *testing.T) {
 }
 
 func TestDisconnected(t *testing.T) {
+	wg := &sync.WaitGroup{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	gp := time.Duration(10 * time.Minute)
-	cm := NewConnManager(1, 5, gp)
+	cm := NewConnManager(ctx, wg, 1, 5, gp)
 	not := cm.Notifee()
 	conn := randConn(t, nil)
 	not.Connected(nil, conn)
@@ -308,8 +333,10 @@ func TestQuickBurstRespectsSilencePeriod(t *testing.T) {
 	if detectrace.WithRace() {
 		t.Skip("race detector is unhappy with this test")
 	}
-
-	cm := NewConnManager(10, 20, 0)
+	wg := &sync.WaitGroup{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cm := NewConnManager(ctx, wg, 10, 20, 0)
 	not := cm.Notifee()
 
 	var conns []network.Conn
@@ -343,9 +370,11 @@ func TestPeerProtectionSingleTag(t *testing.T) {
 	if detectrace.WithRace() {
 		t.Skip("race detector is unhappy with this test")
 	}
-
+	wg := &sync.WaitGroup{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	SilencePeriod = 0
-	cm := NewConnManager(19, 20, 0)
+	cm := NewConnManager(ctx, wg, 19, 20, 0)
 	SilencePeriod = 10 * time.Second
 
 	not := cm.Notifee()
@@ -406,9 +435,11 @@ func TestPeerProtectionMultipleTags(t *testing.T) {
 	if detectrace.WithRace() {
 		t.Skip("race detector is unhappy with this test")
 	}
-
+	wg := &sync.WaitGroup{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	SilencePeriod = 0
-	cm := NewConnManager(19, 20, 0)
+	cm := NewConnManager(ctx, wg, 19, 20, 0)
 	SilencePeriod = 10 * time.Second
 
 	not := cm.Notifee()
@@ -492,8 +523,11 @@ func TestPeerProtectionMultipleTags(t *testing.T) {
 }
 
 func TestPeerProtectionIdempotent(t *testing.T) {
+	wg := &sync.WaitGroup{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	SilencePeriod = 0
-	cm := NewConnManager(10, 20, 0)
+	cm := NewConnManager(ctx, wg, 10, 20, 0)
 	SilencePeriod = 10 * time.Second
 
 	id, _ := tu.RandPeerID()
@@ -524,7 +558,10 @@ func TestPeerProtectionIdempotent(t *testing.T) {
 }
 
 func TestUpsertTag(t *testing.T) {
-	cm := NewConnManager(1, 1, time.Duration(10*time.Minute))
+	wg := &sync.WaitGroup{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cm := NewConnManager(ctx, wg, 1, 1, time.Duration(10*time.Minute))
 	not := cm.Notifee()
 	conn := randConn(t, nil)
 	rp := conn.RemotePeer()
@@ -559,7 +596,10 @@ func TestUpsertTag(t *testing.T) {
 }
 
 func TestTemporaryEntriesClearedFirst(t *testing.T) {
-	cm := NewConnManager(1, 1, 0)
+	wg := &sync.WaitGroup{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cm := NewConnManager(ctx, wg, 1, 1, 0)
 
 	id := tu.RandPeerIDFatal(t)
 	cm.TagPeer(id, "test", 20)
@@ -580,7 +620,10 @@ func TestTemporaryEntriesClearedFirst(t *testing.T) {
 }
 
 func TestTemporaryEntryConvertedOnConnection(t *testing.T) {
-	cm := NewConnManager(1, 1, 0)
+	wg := &sync.WaitGroup{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cm := NewConnManager(ctx, wg, 1, 1, 0)
 
 	conn := randConn(t, nil)
 	cm.TagPeer(conn.RemotePeer(), "test", 20)
