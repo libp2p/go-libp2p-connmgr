@@ -212,7 +212,7 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []network.Conn {
 		// disabled
 		return nil
 	}
-	now := time.Now()
+
 	nconns := int(atomic.LoadInt32(&cm.connCount))
 	if nconns <= cm.lowWater {
 		log.Info("open connection count below limit")
@@ -222,6 +222,8 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []network.Conn {
 	npeers := cm.segments.countPeers()
 	candidates := make([]*peerInfo, 0, npeers)
 	ncandidates := 0
+	gracePeriodStart := time.Now().Add(-cm.gracePeriod)
+
 	cm.plk.RLock()
 	for _, s := range cm.segments {
 		s.Lock()
@@ -230,7 +232,7 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []network.Conn {
 				// skip over protected peer.
 				continue
 			}
-			if inf.firstSeen.Add(cm.gracePeriod).After(now) {
+			if inf.firstSeen.After(gracePeriodStart) {
 				// skip peers in the grace period.
 				continue
 			}
