@@ -303,6 +303,63 @@ func TestDisconnected(t *testing.T) {
 	}
 }
 
+func TestGracePeriod(t *testing.T) {
+	if detectrace.WithRace() {
+		t.Skip("race detector is unhappy with this test")
+	}
+
+	SilencePeriod = 0
+	cm := NewConnManager(10, 20, 100*time.Millisecond)
+	SilencePeriod = 10 * time.Second
+
+	not := cm.Notifee()
+
+	var conns []network.Conn
+
+	// Add a connection and wait the grace period.
+	{
+		rc := randConn(t, not.Disconnected)
+		conns = append(conns, rc)
+		not.Connected(nil, rc)
+
+		time.Sleep(200 * time.Millisecond)
+
+		if rc.(*tconn).closed {
+			t.Fatal("expected conn to remain open")
+		}
+	}
+
+	// quickly add 30 connections (sending us above the high watermark)
+	for i := 0; i < 30; i++ {
+		rc := randConn(t, not.Disconnected)
+		conns = append(conns, rc)
+		not.Connected(nil, rc)
+	}
+
+	cm.TrimOpenConns(context.Background())
+
+	for _, c := range conns {
+		if c.(*tconn).closed {
+			t.Fatal("expected no conns to be closed")
+		}
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	cm.TrimOpenConns(context.Background())
+
+	closed := 0
+	for _, c := range conns {
+		if c.(*tconn).closed {
+			closed++
+		}
+	}
+
+	if closed != 21 {
+		t.Fatal("expected to have closed 21 connections")
+	}
+}
+
 // see https://github.com/libp2p/go-libp2p-connmgr/issues/23
 func TestQuickBurstRespectsSilencePeriod(t *testing.T) {
 	if detectrace.WithRace() {
@@ -350,13 +407,17 @@ func TestPeerProtectionSingleTag(t *testing.T) {
 
 	not := cm.Notifee()
 
-	// produce 20 connections with unique peers.
 	var conns []network.Conn
-	for i := 0; i < 20; i++ {
+	addConn := func(value int) {
 		rc := randConn(t, not.Disconnected)
 		conns = append(conns, rc)
 		not.Connected(nil, rc)
-		cm.TagPeer(rc.RemotePeer(), "test", 20)
+		cm.TagPeer(rc.RemotePeer(), "test", value)
+	}
+
+	// produce 20 connections with unique peers.
+	for i := 0; i < 20; i++ {
+		addConn(20)
 	}
 
 	// protect the first 5 peers.
@@ -368,8 +429,21 @@ func TestPeerProtectionSingleTag(t *testing.T) {
 		cm.TagPeer(c.RemotePeer(), "test", -100)
 	}
 
-	// add one more connection, sending the connection manager overboard.
-	not.Connected(nil, randConn(t, not.Disconnected))
+	// add 1 more conn, this shouldn't send us over the limit as protected conns don't count
+	addConn(20)
+
+	cm.TrimOpenConns(context.Background())
+
+	for _, c := range conns {
+		if c.(*tconn).closed {
+			t.Error("connection was closed by connection manager")
+		}
+	}
+
+	// add 5 more connection, sending the connection manager overboard.
+	for i := 0; i < 5; i++ {
+		addConn(20)
+	}
 
 	cm.TrimOpenConns(context.Background())
 
@@ -379,15 +453,22 @@ func TestPeerProtectionSingleTag(t *testing.T) {
 		}
 	}
 
+	closed := 0
+	for _, c := range conns {
+		if c.(*tconn).closed {
+			closed++
+		}
+	}
+	if closed != 2 {
+		t.Errorf("expected 2 connection to be closed, found %d", closed)
+	}
+
 	// unprotect the first peer.
 	cm.Unprotect(protected[0].RemotePeer(), "global")
 
 	// add 2 more connections, sending the connection manager overboard again.
 	for i := 0; i < 2; i++ {
-		rc := randConn(t, not.Disconnected)
-		conns = append(conns, rc)
-		not.Connected(nil, rc)
-		cm.TagPeer(rc.RemotePeer(), "test", 20)
+		addConn(20)
 	}
 
 	cm.TrimOpenConns(context.Background())

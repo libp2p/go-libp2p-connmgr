@@ -212,7 +212,7 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []network.Conn {
 		// disabled
 		return nil
 	}
-	now := time.Now()
+
 	nconns := int(atomic.LoadInt32(&cm.connCount))
 	if nconns <= cm.lowWater {
 		log.Info("open connection count below limit")
@@ -221,6 +221,9 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []network.Conn {
 
 	npeers := cm.segments.countPeers()
 	candidates := make([]*peerInfo, 0, npeers)
+	ncandidates := 0
+	gracePeriodStart := time.Now().Add(-cm.gracePeriod)
+
 	cm.plk.RLock()
 	for _, s := range cm.segments {
 		s.Lock()
@@ -229,11 +232,25 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []network.Conn {
 				// skip over protected peer.
 				continue
 			}
+			if inf.firstSeen.After(gracePeriodStart) {
+				// skip peers in the grace period.
+				continue
+			}
 			candidates = append(candidates, inf)
+			ncandidates += len(inf.conns)
 		}
 		s.Unlock()
 	}
 	cm.plk.RUnlock()
+
+	if ncandidates < cm.lowWater {
+		log.Info("open connection count above limit but too many are in the grace period")
+		// We have too many connections but fewer than lowWater
+		// connections out of the grace period.
+		//
+		// If we trimmed now, we'd kill potentially useful connections.
+		return nil
+	}
 
 	// Sort peers according to their value.
 	sort.Slice(candidates, func(i, j int) bool {
@@ -246,7 +263,7 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []network.Conn {
 		return left.value < right.value
 	})
 
-	target := nconns - cm.lowWater
+	target := ncandidates - cm.lowWater
 
 	// slightly overallocate because we may have more than one conns per peer
 	selected := make([]network.Conn, 0, target+10)
@@ -254,10 +271,6 @@ func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []network.Conn {
 	for _, inf := range candidates {
 		if target <= 0 {
 			break
-		}
-		// TODO: should we be using firstSeen or the time associated with the connection itself?
-		if inf.firstSeen.Add(cm.gracePeriod).After(now) {
-			continue
 		}
 
 		// lock this to protect from concurrent modifications from connect/disconnect events
