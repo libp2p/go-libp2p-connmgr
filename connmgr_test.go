@@ -52,7 +52,7 @@ func randConn(t testing.TB, discNotify func(network.Network, network.Conn)) netw
 func TestTrimBlocks(t *testing.T) {
 	cm := NewConnManager(200, 300, 0)
 
-	cm.trimMu.RLock()
+	cm.lastTrimMu.RLock()
 
 	doneCh := make(chan struct{}, 2)
 	go func() {
@@ -66,10 +66,10 @@ func TestTrimBlocks(t *testing.T) {
 	time.Sleep(time.Millisecond)
 	select {
 	case <-doneCh:
-		cm.trimMu.RUnlock()
+		cm.lastTrimMu.RUnlock()
 		t.Fatal("expected trim to block")
 	default:
-		cm.trimMu.RUnlock()
+		cm.lastTrimMu.RUnlock()
 	}
 	<-doneCh
 	<-doneCh
@@ -80,8 +80,8 @@ func TestTrimCancels(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cm := NewConnManager(200, 300, 0)
 
-	cm.trimMu.RLock()
-	defer cm.trimMu.RUnlock()
+	cm.lastTrimMu.RLock()
+	defer cm.lastTrimMu.RUnlock()
 
 	doneCh := make(chan struct{})
 	go func() {
@@ -103,7 +103,7 @@ func TestTrimClosed(t *testing.T) {
 // Make sure joining an existing trim works.
 func TestTrimJoin(t *testing.T) {
 	cm := NewConnManager(200, 300, 0)
-	cm.trimMu.RLock()
+	cm.lastTrimMu.RLock()
 	var wg sync.WaitGroup
 	wg.Add(3)
 	go func() {
@@ -120,7 +120,7 @@ func TestTrimJoin(t *testing.T) {
 		cm.TrimOpenConns(context.Background())
 	}()
 	time.Sleep(time.Millisecond)
-	cm.trimMu.RUnlock()
+	cm.lastTrimMu.RUnlock()
 	wg.Wait()
 }
 
