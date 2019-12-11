@@ -36,9 +36,11 @@ type BasicConnMgr struct {
 	plk       sync.RWMutex
 	protected map[peer.ID]map[string]struct{}
 
-	// channel-based semaphore that enforces only a single trim is in progress
-	trimRunningCh chan struct{}
-	lastTrim      time.Time
+	trimTrigger chan chan<- struct{}
+
+	lastTrimMu sync.RWMutex
+	lastTrim   time.Time
+
 	silencePeriod time.Duration
 
 	ctx    context.Context
@@ -96,7 +98,7 @@ func NewConnManager(low, hi int, grace time.Duration) *BasicConnMgr {
 		highWater:     hi,
 		lowWater:      low,
 		gracePeriod:   grace,
-		trimRunningCh: make(chan struct{}, 1),
+		trimTrigger:   make(chan chan<- struct{}),
 		protected:     make(map[peer.ID]map[string]struct{}, 16),
 		silencePeriod: SilencePeriod,
 		ctx:           ctx,
@@ -164,28 +166,29 @@ type peerInfo struct {
 // pruning those peers with the lowest scores first, as long as they are not within their
 // grace period.
 //
-// TODO: error return value so we can cleanly signal we are aborting because:
-// (a) there's another trim in progress, or (b) the silence period is in effect.
+// This function blocks until a trim is completed. If a trim is underway, a new
+// one won't be started, and instead it'll wait until that one is completed before
+// returning.
 func (cm *BasicConnMgr) TrimOpenConns(ctx context.Context) {
+	// TODO: error return value so we can cleanly signal we are aborting because:
+	// (a) there's another trim in progress, or (b) the silence period is in effect.
+
+	// Trigger a trim.
+	ch := make(chan struct{})
 	select {
-	case cm.trimRunningCh <- struct{}{}:
-	default:
-		return
-	}
-	defer func() { <-cm.trimRunningCh }()
-	if time.Since(cm.lastTrim) < cm.silencePeriod {
-		// skip this attempt to trim as the last one just took place.
-		return
+	case cm.trimTrigger <- ch:
+	case <-cm.ctx.Done():
+	case <-ctx.Done():
+		// TODO: return an error?
 	}
 
-	defer log.EventBegin(ctx, "connCleanup").Done()
-	for _, c := range cm.getConnsToClose(ctx) {
-		log.Info("closing conn: ", c.RemotePeer())
-		log.Event(ctx, "closeConn", c.RemotePeer())
-		c.Close()
+	// Wait for the trim.
+	select {
+	case <-ch:
+	case <-cm.ctx.Done():
+	case <-ctx.Done():
+		// TODO: return an error?
 	}
-
-	cm.lastTrim = time.Now()
 }
 
 func (cm *BasicConnMgr) background() {
@@ -193,21 +196,66 @@ func (cm *BasicConnMgr) background() {
 	defer ticker.Stop()
 
 	for {
+		var waiting chan<- struct{}
 		select {
 		case <-ticker.C:
-			if atomic.LoadInt32(&cm.connCount) > int32(cm.highWater) {
-				cm.TrimOpenConns(cm.ctx)
+			if atomic.LoadInt32(&cm.connCount) < int32(cm.highWater) {
+				// Below high water, skip.
+				continue
 			}
-
+		case waiting = <-cm.trimTrigger:
 		case <-cm.ctx.Done():
 			return
+		}
+		cm.trim()
+
+		// Notify anyone waiting on this trim.
+		if waiting != nil {
+			close(waiting)
+		}
+
+		for {
+			select {
+			case waiting = <-cm.trimTrigger:
+				if waiting != nil {
+					close(waiting)
+				}
+				continue
+			default:
+			}
+			break
 		}
 	}
 }
 
+func (cm *BasicConnMgr) trim() {
+	cm.lastTrimMu.RLock()
+	// read the last trim time under the lock
+	lastTrim := cm.lastTrim
+	cm.lastTrimMu.RUnlock()
+
+	// skip this attempt to trim if the last one just took place.
+	if time.Since(lastTrim) < cm.silencePeriod {
+		return
+	}
+
+	// do the actual trim.
+	defer log.EventBegin(cm.ctx, "connCleanup").Done()
+	for _, c := range cm.getConnsToClose() {
+		log.Info("closing conn: ", c.RemotePeer())
+		log.Event(cm.ctx, "closeConn", c.RemotePeer())
+		c.Close()
+	}
+
+	// finally, update the last trim time.
+	cm.lastTrimMu.Lock()
+	cm.lastTrim = time.Now()
+	cm.lastTrimMu.Unlock()
+}
+
 // getConnsToClose runs the heuristics described in TrimOpenConns and returns the
 // connections to close.
-func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []network.Conn {
+func (cm *BasicConnMgr) getConnsToClose() []network.Conn {
 	if cm.lowWater == 0 || cm.highWater == 0 {
 		// disabled
 		return nil
@@ -386,10 +434,14 @@ type CMInfo struct {
 
 // GetInfo returns the configuration and status data for this connection manager.
 func (cm *BasicConnMgr) GetInfo() CMInfo {
+	cm.lastTrimMu.RLock()
+	lastTrim := cm.lastTrim
+	cm.lastTrimMu.RUnlock()
+
 	return CMInfo{
 		HighWater:   cm.highWater,
 		LowWater:    cm.lowWater,
-		LastTrim:    cm.lastTrim,
+		LastTrim:    lastTrim,
 		GracePeriod: cm.gracePeriod,
 		ConnCount:   int(atomic.LoadInt32(&cm.connCount)),
 	}
