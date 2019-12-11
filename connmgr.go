@@ -36,8 +36,9 @@ type BasicConnMgr struct {
 	plk       sync.RWMutex
 	protected map[peer.ID]map[string]struct{}
 
-	// channel-based semaphore that enforces only a single trim is in progress
-	trimRunningCh chan struct{}
+	trimMu        sync.RWMutex
+	trimTrigger   chan struct{}
+	trimSignal    chan struct{}
 	lastTrim      time.Time
 	silencePeriod time.Duration
 
@@ -96,7 +97,8 @@ func NewConnManager(low, hi int, grace time.Duration) *BasicConnMgr {
 		highWater:     hi,
 		lowWater:      low,
 		gracePeriod:   grace,
-		trimRunningCh: make(chan struct{}, 1),
+		trimTrigger:   make(chan struct{}),
+		trimSignal:    make(chan struct{}),
 		protected:     make(map[peer.ID]map[string]struct{}, 16),
 		silencePeriod: SilencePeriod,
 		ctx:           ctx,
@@ -167,25 +169,28 @@ type peerInfo struct {
 // TODO: error return value so we can cleanly signal we are aborting because:
 // (a) there's another trim in progress, or (b) the silence period is in effect.
 func (cm *BasicConnMgr) TrimOpenConns(ctx context.Context) {
+	cm.trimMu.RLock()
+	trimSignal := cm.trimSignal
+	cm.trimMu.RUnlock()
+
+	// Trigger a trim.
 	select {
-	case cm.trimRunningCh <- struct{}{}:
-	default:
+	case cm.trimTrigger <- struct{}{}:
+	case <-trimSignal:
+		// Someone else just trimmed.
 		return
-	}
-	defer func() { <-cm.trimRunningCh }()
-	if time.Since(cm.lastTrim) < cm.silencePeriod {
-		// skip this attempt to trim as the last one just took place.
-		return
+	case <-cm.ctx.Done():
+	case <-ctx.Done():
+		// TODO: return an error?
 	}
 
-	defer log.EventBegin(ctx, "connCleanup").Done()
-	for _, c := range cm.getConnsToClose(ctx) {
-		log.Info("closing conn: ", c.RemotePeer())
-		log.Event(ctx, "closeConn", c.RemotePeer())
-		c.Close()
+	// Wait for the trim.
+	select {
+	case <-trimSignal:
+	case <-cm.ctx.Done():
+	case <-ctx.Done():
+		// TODO: return an error?
 	}
-
-	cm.lastTrim = time.Now()
 }
 
 func (cm *BasicConnMgr) background() {
@@ -195,19 +200,56 @@ func (cm *BasicConnMgr) background() {
 	for {
 		select {
 		case <-ticker.C:
-			if atomic.LoadInt32(&cm.connCount) > int32(cm.highWater) {
-				cm.TrimOpenConns(cm.ctx)
+			if atomic.LoadInt32(&cm.connCount) < int32(cm.highWater) {
+				// Below high water, skip.
+				continue
 			}
-
+		case <-cm.trimTrigger:
 		case <-cm.ctx.Done():
 			return
 		}
+		cm.trim()
 	}
+}
+
+func (cm *BasicConnMgr) trim() {
+	cm.trimMu.Lock()
+
+	// read the last trim time under the lock
+	lastTrim := cm.lastTrim
+
+	// swap out the trim signal
+	trimSignal := cm.trimSignal
+	cm.trimSignal = make(chan struct{})
+
+	cm.trimMu.Unlock()
+
+	// always signal a trim, even if we _don't_ trim, to unblock anyone
+	// waiting.
+	defer close(trimSignal)
+
+	// skip this attempt to trim if the last one just took place.
+	if time.Since(lastTrim) < cm.silencePeriod {
+		return
+	}
+
+	// do the actual trim.
+	defer log.EventBegin(cm.ctx, "connCleanup").Done()
+	for _, c := range cm.getConnsToClose() {
+		log.Info("closing conn: ", c.RemotePeer())
+		log.Event(cm.ctx, "closeConn", c.RemotePeer())
+		c.Close()
+	}
+
+	// finally, update the last trim time.
+	cm.trimMu.Lock()
+	cm.lastTrim = time.Now()
+	cm.trimMu.Unlock()
 }
 
 // getConnsToClose runs the heuristics described in TrimOpenConns and returns the
 // connections to close.
-func (cm *BasicConnMgr) getConnsToClose(ctx context.Context) []network.Conn {
+func (cm *BasicConnMgr) getConnsToClose() []network.Conn {
 	if cm.lowWater == 0 || cm.highWater == 0 {
 		// disabled
 		return nil
@@ -386,10 +428,14 @@ type CMInfo struct {
 
 // GetInfo returns the configuration and status data for this connection manager.
 func (cm *BasicConnMgr) GetInfo() CMInfo {
+	cm.trimMu.RLock()
+	lastTrim := cm.lastTrim
+	cm.trimMu.RUnlock()
+
 	return CMInfo{
 		HighWater:   cm.highWater,
 		LowWater:    cm.lowWater,
-		LastTrim:    cm.lastTrim,
+		LastTrim:    lastTrim,
 		GracePeriod: cm.gracePeriod,
 		ConnCount:   int(atomic.LoadInt32(&cm.connCount)),
 	}

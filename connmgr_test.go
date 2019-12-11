@@ -2,6 +2,7 @@ package connmgr
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,6 +48,82 @@ func randConn(t testing.TB, discNotify func(network.Network, network.Conn)) netw
 	return &tconn{peer: pid, disconnectNotify: discNotify}
 }
 
+// Make sure multiple trim calls block.
+func TestTrimBlocks(t *testing.T) {
+	cm := NewConnManager(200, 300, 0)
+
+	cm.trimMu.RLock()
+
+	doneCh := make(chan struct{}, 2)
+	go func() {
+		cm.TrimOpenConns(context.Background())
+		doneCh <- struct{}{}
+	}()
+	go func() {
+		cm.TrimOpenConns(context.Background())
+		doneCh <- struct{}{}
+	}()
+	time.Sleep(time.Millisecond)
+	select {
+	case <-doneCh:
+		cm.trimMu.RUnlock()
+		t.Fatal("expected trim to block")
+	default:
+		cm.trimMu.RUnlock()
+	}
+	<-doneCh
+	<-doneCh
+}
+
+// Make sure we return from trim when the context is canceled.
+func TestTrimCancels(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cm := NewConnManager(200, 300, 0)
+
+	cm.trimMu.RLock()
+	defer cm.trimMu.RUnlock()
+
+	doneCh := make(chan struct{})
+	go func() {
+		defer close(doneCh)
+		cm.TrimOpenConns(ctx)
+	}()
+	time.Sleep(time.Millisecond)
+	cancel()
+	<-doneCh
+}
+
+// Make sure trim returns when closed.
+func TestTrimClosed(t *testing.T) {
+	cm := NewConnManager(200, 300, 0)
+	cm.Close()
+	cm.TrimOpenConns(context.Background())
+}
+
+// Make sure joining an existing trim works.
+func TestTrimJoin(t *testing.T) {
+	cm := NewConnManager(200, 300, 0)
+	cm.trimMu.RLock()
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		cm.TrimOpenConns(context.Background())
+	}()
+	time.Sleep(time.Millisecond)
+	go func() {
+		defer wg.Done()
+		cm.TrimOpenConns(context.Background())
+	}()
+	go func() {
+		defer wg.Done()
+		cm.TrimOpenConns(context.Background())
+	}()
+	time.Sleep(time.Millisecond)
+	cm.trimMu.RUnlock()
+	wg.Wait()
+}
+
 func TestConnTrimming(t *testing.T) {
 	cm := NewConnManager(200, 300, 0)
 	not := cm.Notifee()
@@ -86,19 +163,19 @@ func TestConnTrimming(t *testing.T) {
 
 func TestConnsToClose(t *testing.T) {
 	cm := NewConnManager(0, 10, 0)
-	conns := cm.getConnsToClose(context.Background())
+	conns := cm.getConnsToClose()
 	if conns != nil {
 		t.Fatal("expected no connections")
 	}
 
 	cm = NewConnManager(10, 0, 0)
-	conns = cm.getConnsToClose(context.Background())
+	conns = cm.getConnsToClose()
 	if conns != nil {
 		t.Fatal("expected no connections")
 	}
 
 	cm = NewConnManager(1, 1, 0)
-	conns = cm.getConnsToClose(context.Background())
+	conns = cm.getConnsToClose()
 	if conns != nil {
 		t.Fatal("expected no connections")
 	}
@@ -109,7 +186,7 @@ func TestConnsToClose(t *testing.T) {
 		conn := randConn(t, nil)
 		not.Connected(nil, conn)
 	}
-	conns = cm.getConnsToClose(context.Background())
+	conns = cm.getConnsToClose()
 	if len(conns) != 0 {
 		t.Fatal("expected no connections")
 	}
