@@ -166,9 +166,13 @@ type peerInfo struct {
 // pruning those peers with the lowest scores first, as long as they are not within their
 // grace period.
 //
-// TODO: error return value so we can cleanly signal we are aborting because:
-// (a) there's another trim in progress, or (b) the silence period is in effect.
+// This function blocks until a trim is completed. If a trim is underway, a new
+// one won't be started, and instead it'll wait until that one is completed before
+// returning.
 func (cm *BasicConnMgr) TrimOpenConns(ctx context.Context) {
+	// TODO: error return value so we can cleanly signal we are aborting because:
+	// (a) there's another trim in progress, or (b) the silence period is in effect.
+
 	// Trigger a trim.
 	ch := make(chan struct{})
 	select {
