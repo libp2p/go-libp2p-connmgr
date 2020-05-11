@@ -510,6 +510,7 @@ func (nn *cmNotifee) Connected(n network.Network, c network.Conn) {
 			id:        id,
 			firstSeen: time.Now(),
 			tags:      make(map[string]int),
+			decaying:  make(map[*decayingTag]*connmgr.DecayingValue),
 			conns:     make(map[network.Conn]time.Time),
 		}
 		s.peers[id] = pinfo
