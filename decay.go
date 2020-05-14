@@ -22,6 +22,12 @@ type bumpCmd struct {
 	delta int
 }
 
+// removeCmd represents a tag removal command.
+type removeCmd struct {
+	peer peer.ID
+	tag  *decayingTag
+}
+
 // decayer tracks and manages all decaying tags and their values.
 type decayer struct {
 	cfg   *DecayerCfg
@@ -34,8 +40,10 @@ type decayer struct {
 	// lastTick stores the last time the decayer ticked. Guarded by atomic.
 	lastTick atomic.Value
 
-	// bumpCh queues bump commands to be processed by the loop.
-	bumpCh chan bumpCmd
+	// bumpTagCh queues bump commands to be processed by the loop.
+	bumpTagCh   chan bumpCmd
+	removeTagCh chan removeCmd
+	closeTagCh  chan *decayingTag
 
 	// closure thingies.
 	closeCh chan struct{}
@@ -70,13 +78,15 @@ func NewDecayer(cfg *DecayerCfg, mgr *BasicConnMgr) (*decayer, error) {
 	}
 
 	d := &decayer{
-		cfg:       cfg,
-		mgr:       mgr,
-		clock:     cfg.Clock,
-		knownTags: make(map[string]*decayingTag),
-		bumpCh:    make(chan bumpCmd, 128),
-		closeCh:   make(chan struct{}),
-		doneCh:    make(chan struct{}),
+		cfg:         cfg,
+		mgr:         mgr,
+		clock:       cfg.Clock,
+		knownTags:   make(map[string]*decayingTag),
+		bumpTagCh:   make(chan bumpCmd, 128),
+		removeTagCh: make(chan removeCmd, 128),
+		closeTagCh:  make(chan *decayingTag, 128),
+		closeCh:     make(chan struct{}),
+		doneCh:      make(chan struct{}),
 	}
 
 	d.lastTick.Store(d.clock.Now())
@@ -203,7 +213,7 @@ func (d *decayer) process() {
 				delete(visit, tag)
 			}
 
-		case bmp = <-d.bumpCh:
+		case bmp = <-d.bumpTagCh:
 			var (
 				now       = d.clock.Now()
 				peer, tag = bmp.peer, bmp.tag
@@ -231,9 +241,42 @@ func (d *decayer) process() {
 
 			s.Unlock()
 
+		case rm := <-d.removeTagCh:
+			s := d.mgr.segments.get(rm.peer)
+			s.Lock()
+
+			p := s.tagInfoFor(rm.peer)
+			v, ok := p.decaying[rm.tag]
+			if !ok {
+				s.Unlock()
+				continue
+			}
+			p.value -= v.Value
+			delete(p.decaying, rm.tag)
+			s.Unlock()
+
+		case t := <-d.closeTagCh:
+			// Stop tracking the tag.
+			d.tagsMu.Lock()
+			delete(d.knownTags, t.name)
+			d.tagsMu.Unlock()
+
+			// Remove the tag from all peers that had it in the connmgr.
+			for _, s := range d.mgr.segments {
+				// visit all segments, and attempt to remove the tag from all the peers it stores.
+				s.Lock()
+				for _, p := range s.peers {
+					if dt, ok := p.decaying[t]; ok {
+						// decrease the value of the tagInfo, and delete the tag.
+						p.value -= dt.Value
+						delete(p.decaying, t)
+					}
+				}
+				s.Unlock()
+			}
+
 		case <-d.closeCh:
 			return
-
 		}
 	}
 }
@@ -247,6 +290,10 @@ type decayingTag struct {
 	nextTick time.Time
 	decayFn  connmgr.DecayFn
 	bumpFn   connmgr.BumpFn
+
+	// closed marks this tag as closed, so that if it's bumped after being
+	// closed, we can return an error. 0 = false; 1 = true; guarded by atomic.
+	closed int32
 }
 
 var _ connmgr.DecayingTag = (*decayingTag)(nil)
@@ -261,18 +308,49 @@ func (t *decayingTag) Interval() time.Duration {
 
 // Bump bumps a tag for this peer.
 func (t *decayingTag) Bump(p peer.ID, delta int) error {
+	if atomic.LoadInt32(&t.closed) == 1 {
+		return fmt.Errorf("decaying tag %s had been closed; no further bumps are accepted", t.name)
+	}
+
 	bmp := bumpCmd{peer: p, tag: t, delta: delta}
 
 	select {
-	case t.trkr.bumpCh <- bmp:
+	case t.trkr.bumpTagCh <- bmp:
 		return nil
-
 	default:
 		return fmt.Errorf(
 			"unable to bump decaying tag for peer %s, tag %s, delta %d; queue full (len=%d)",
-			p.Pretty(),
-			t.name,
-			delta,
-			len(t.trkr.bumpCh))
+			p.Pretty(), t.name, delta, len(t.trkr.bumpTagCh))
+	}
+}
+
+func (t *decayingTag) Remove(p peer.ID) error {
+	if atomic.LoadInt32(&t.closed) == 1 {
+		return fmt.Errorf("decaying tag %s had been closed; no further removals are accepted", t.name)
+	}
+
+	rm := removeCmd{peer: p, tag: t}
+
+	select {
+	case t.trkr.removeTagCh <- rm:
+		return nil
+	default:
+		return fmt.Errorf(
+			"unable to remove decaying tag for peer %s, tag %s; queue full (len=%d)",
+			p.Pretty(), t.name, len(t.trkr.removeTagCh))
+	}
+}
+
+func (t *decayingTag) Close() error {
+	if !atomic.CompareAndSwapInt32(&t.closed, 0, 1) {
+		log.Warnf("duplicate decaying tag closure: %s; skipping", t.name)
+		return nil
+	}
+
+	select {
+	case t.trkr.closeTagCh <- t:
+		return nil
+	default:
+		return fmt.Errorf("unable to close decaying tag %s; queue full (len=%d)", t.name, len(t.trkr.closeTagCh))
 	}
 }
