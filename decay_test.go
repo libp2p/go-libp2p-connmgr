@@ -4,9 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libp2p/go-libp2p-core/peer"
-
 	"github.com/libp2p/go-libp2p-core/connmgr"
+	"github.com/libp2p/go-libp2p-core/peer"
 	tu "github.com/libp2p/go-libp2p-core/test"
 
 	"github.com/benbjohnson/clock"
@@ -18,7 +17,7 @@ func TestDecayExpire(t *testing.T) {
 		mgr, decay, mockClock = testDecayTracker(t)
 	)
 
-	tag, err := decay.RegisterDecayingTag("pop", 250*time.Millisecond, ExpireWhenInactive(1*time.Second), SumUnbounded())
+	tag, err := decay.RegisterDecayingTag("pop", 250*time.Millisecond, connmgr.DecayExpireWhenInactive(1*time.Second), connmgr.BumpSumUnbounded())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +50,7 @@ func TestMultipleBumps(t *testing.T) {
 		mgr, decay, _ = testDecayTracker(t)
 	)
 
-	tag, err := decay.RegisterDecayingTag("pop", 250*time.Millisecond, ExpireWhenInactive(1*time.Second), SumBounded(10, 20))
+	tag, err := decay.RegisterDecayingTag("pop", 250*time.Millisecond, connmgr.DecayExpireWhenInactive(1*time.Second), connmgr.BumpSumBounded(10, 20))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,17 +84,17 @@ func TestMultipleTagsNoDecay(t *testing.T) {
 		mgr, decay, _ = testDecayTracker(t)
 	)
 
-	tag1, err := decay.RegisterDecayingTag("beep", 250*time.Millisecond, NoDecay(), SumBounded(0, 100))
+	tag1, err := decay.RegisterDecayingTag("beep", 250*time.Millisecond, connmgr.DecayNone(), connmgr.BumpSumBounded(0, 100))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	tag2, err := decay.RegisterDecayingTag("bop", 250*time.Millisecond, NoDecay(), SumBounded(0, 100))
+	tag2, err := decay.RegisterDecayingTag("bop", 250*time.Millisecond, connmgr.DecayNone(), connmgr.BumpSumBounded(0, 100))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	tag3, err := decay.RegisterDecayingTag("foo", 250*time.Millisecond, NoDecay(), SumBounded(0, 100))
+	tag3, err := decay.RegisterDecayingTag("foo", 250*time.Millisecond, connmgr.DecayNone(), connmgr.BumpSumBounded(0, 100))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,17 +127,17 @@ func TestCustomFunctions(t *testing.T) {
 		mgr, decay, mockClock = testDecayTracker(t)
 	)
 
-	tag1, err := decay.RegisterDecayingTag("beep", 250*time.Millisecond, FixedDecay(10), SumUnbounded())
+	tag1, err := decay.RegisterDecayingTag("beep", 250*time.Millisecond, connmgr.DecayFixed(10), connmgr.BumpSumUnbounded())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	tag2, err := decay.RegisterDecayingTag("bop", 100*time.Millisecond, FixedDecay(5), SumUnbounded())
+	tag2, err := decay.RegisterDecayingTag("bop", 100*time.Millisecond, connmgr.DecayFixed(5), connmgr.BumpSumUnbounded())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	tag3, err := decay.RegisterDecayingTag("foo", 50*time.Millisecond, FixedDecay(1), SumUnbounded())
+	tag3, err := decay.RegisterDecayingTag("foo", 50*time.Millisecond, connmgr.DecayFixed(1), connmgr.BumpSumUnbounded())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,17 +178,17 @@ func TestMultiplePeers(t *testing.T) {
 		mgr, decay, mockClock = testDecayTracker(t)
 	)
 
-	tag1, err := decay.RegisterDecayingTag("beep", 250*time.Millisecond, FixedDecay(10), SumUnbounded())
+	tag1, err := decay.RegisterDecayingTag("beep", 250*time.Millisecond, connmgr.DecayFixed(10), connmgr.BumpSumUnbounded())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	tag2, err := decay.RegisterDecayingTag("bop", 100*time.Millisecond, FixedDecay(5), SumUnbounded())
+	tag2, err := decay.RegisterDecayingTag("bop", 100*time.Millisecond, connmgr.DecayFixed(5), connmgr.BumpSumUnbounded())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	tag3, err := decay.RegisterDecayingTag("foo", 50*time.Millisecond, FixedDecay(1), SumUnbounded())
+	tag3, err := decay.RegisterDecayingTag("foo", 50*time.Millisecond, connmgr.DecayFixed(1), connmgr.BumpSumUnbounded())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +232,7 @@ func TestLinearDecayOverwrite(t *testing.T) {
 		mgr, decay, mockClock = testDecayTracker(t)
 	)
 
-	tag1, err := decay.RegisterDecayingTag("beep", 250*time.Millisecond, LinearDecay(0.5), Overwrite())
+	tag1, err := decay.RegisterDecayingTag("beep", 250*time.Millisecond, connmgr.DecayLinear(0.5), connmgr.BumpOverwrite())
 	if err != nil {
 		t.Fatal(err)
 	}
