@@ -31,8 +31,8 @@ type decayer struct {
 	tagsMu    sync.Mutex
 	knownTags map[string]*decayingTag
 
-	// currRound is the current round we're in; guarded by atomic.
-	currRound uint64
+	// lastTick stores the last time the decayer ticked. Guarded by atomic.
+	lastTick atomic.Value
 
 	// bumpCh queues bump commands to be processed by the loop.
 	bumpCh chan bumpCmd
@@ -79,21 +79,12 @@ func NewDecayer(cfg *DecayerCfg, mgr *BasicConnMgr) (*decayer, error) {
 		doneCh:    make(chan struct{}),
 	}
 
+	d.lastTick.Store(d.clock.Now())
+
 	// kick things off.
 	go d.process()
 
 	return d, nil
-}
-
-// decayingTag represents a decaying tag, with an associated decay interval, a
-// decay function, and a bump function.
-type decayingTag struct {
-	trkr      *decayer
-	name      string
-	interval  time.Duration
-	nextRound uint64
-	decayFn   connmgr.DecayFn
-	bumpFn    connmgr.BumpFn
 }
 
 func (d *decayer) RegisterDecayingTag(name string, interval time.Duration, decayFn connmgr.DecayFn, bumpFn connmgr.BumpFn) (connmgr.DecayingTag, error) {
@@ -106,30 +97,24 @@ func (d *decayer) RegisterDecayingTag(name string, interval time.Duration, decay
 	}
 
 	if interval < d.cfg.Resolution {
-		err := fmt.Errorf("decay interval for %s (%s) is lower than tracker's resolution (%s)",
-			name,
-			interval,
-			d.cfg.Resolution)
-		return nil, err
+		log.Warnf("decay interval for %s (%s) was lower than tracker's resolution (%s); overridden to resolution",
+			name, interval, d.cfg.Resolution)
+		interval = d.cfg.Resolution
 	}
 
 	if interval%d.cfg.Resolution != 0 {
-		err := fmt.Errorf("decay interval for tag %s (%s) is not a multiple of tracker's resolution (%s); "+
-			"preventing undesired loss of precision",
-			name,
-			interval,
-			d.cfg.Resolution)
-		return nil, err
+		log.Warnf("decay interval for tag %s (%s) is not a multiple of tracker's resolution (%s); "+
+			"some precision may be lost", name, interval, d.cfg.Resolution)
 	}
 
-	initRound := atomic.LoadUint64(&d.currRound) + uint64(interval/d.cfg.Resolution)
+	lastTick := d.lastTick.Load().(time.Time)
 	tag = &decayingTag{
-		trkr:      d,
-		name:      name,
-		interval:  interval,
-		nextRound: initRound,
-		decayFn:   decayFn,
-		bumpFn:    bumpFn,
+		trkr:     d,
+		name:     name,
+		interval: interval,
+		nextTick: lastTick.Add(interval),
+		decayFn:  decayFn,
+		bumpFn:   bumpFn,
 	}
 
 	d.knownTags[name] = tag
@@ -169,14 +154,18 @@ func (d *decayer) process() {
 	for {
 		select {
 		case now = <-ticker.C:
-			round := atomic.AddUint64(&d.currRound, 1)
+			d.lastTick.Store(now)
 
+			d.tagsMu.Lock()
 			for _, tag := range d.knownTags {
-				if tag.nextRound <= round {
-					// Mark the tag to be updated in this round.
-					visit[tag] = struct{}{}
+				if tag.nextTick.After(now) {
+					// skip the tag.
+					continue
 				}
+				// Mark the tag to be updated in this round.
+				visit[tag] = struct{}{}
 			}
+			d.tagsMu.Unlock()
 
 			// Visit each peer, and decay tags that need to be decayed.
 			for _, s := range d.mgr.segments {
@@ -198,7 +187,7 @@ func (d *decayer) process() {
 							delete(p.decaying, tag)
 						} else {
 							// accumulate the delta, and apply the changes.
-							delta += (after - v.Value)
+							delta += after - v.Value
 							v.Value, v.LastVisit = after, now
 						}
 						p.value += delta
@@ -210,7 +199,7 @@ func (d *decayer) process() {
 
 			// Reset each tag's next visit round, and clear the visited set.
 			for tag := range visit {
-				tag.nextRound = round + uint64(tag.interval/d.cfg.Resolution)
+				tag.nextTick = tag.nextTick.Add(tag.interval)
 				delete(visit, tag)
 			}
 
@@ -247,6 +236,27 @@ func (d *decayer) process() {
 
 		}
 	}
+}
+
+// decayingTag represents a decaying tag, with an associated decay interval, a
+// decay function, and a bump function.
+type decayingTag struct {
+	trkr     *decayer
+	name     string
+	interval time.Duration
+	nextTick time.Time
+	decayFn  connmgr.DecayFn
+	bumpFn   connmgr.BumpFn
+}
+
+var _ connmgr.DecayingTag = (*decayingTag)(nil)
+
+func (t *decayingTag) Name() string {
+	return t.name
+}
+
+func (t *decayingTag) Interval() time.Duration {
+	return t.interval
 }
 
 // Bump bumps a tag for this peer.

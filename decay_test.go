@@ -7,9 +7,12 @@ import (
 	"github.com/libp2p/go-libp2p-core/connmgr"
 	"github.com/libp2p/go-libp2p-core/peer"
 	tu "github.com/libp2p/go-libp2p-core/test"
+	"github.com/stretchr/testify/require"
 
 	"github.com/benbjohnson/clock"
 )
+
+const TestResolution = 50 * time.Millisecond
 
 func TestDecayExpire(t *testing.T) {
 	var (
@@ -262,10 +265,46 @@ func TestLinearDecayOverwrite(t *testing.T) {
 	}
 }
 
+func TestResolutionMisaligned(t *testing.T) {
+	var (
+		id                    = tu.RandPeerIDFatal(t)
+		mgr, decay, mockClock = testDecayTracker(t)
+		require               = require.New(t)
+	)
+
+	tag1, err := decay.RegisterDecayingTag("beep", time.Duration(float64(TestResolution)*1.4), connmgr.DecayFixed(1), connmgr.BumpOverwrite())
+	require.NoError(err)
+
+	tag2, err := decay.RegisterDecayingTag("bop", time.Duration(float64(TestResolution)*2.4), connmgr.DecayFixed(1), connmgr.BumpOverwrite())
+	require.NoError(err)
+
+	_ = tag1.Bump(id, 1000)
+	_ = tag2.Bump(id, 1000)
+	// allow the background goroutine to process bumps.
+	<-time.After(500 * time.Millisecond)
+
+	// nothing has happened.
+	mockClock.Add(TestResolution)
+	require.Equal(1000, mgr.GetTagInfo(id).Tags["beep"])
+	require.Equal(1000, mgr.GetTagInfo(id).Tags["bop"])
+
+	// next tick; tag1 would've ticked.
+	mockClock.Add(TestResolution)
+	require.Equal(999, mgr.GetTagInfo(id).Tags["beep"])
+	require.Equal(1000, mgr.GetTagInfo(id).Tags["bop"])
+
+	// next tick; tag1 would've ticked twice, tag2 once.
+	mockClock.Add(TestResolution)
+	require.Equal(998, mgr.GetTagInfo(id).Tags["beep"])
+	require.Equal(999, mgr.GetTagInfo(id).Tags["bop"])
+
+	require.Equal(1997, mgr.GetTagInfo(id).Value)
+}
+
 func testDecayTracker(tb testing.TB) (*BasicConnMgr, connmgr.Decayer, *clock.Mock) {
 	mockClock := clock.NewMock()
 	cfg := &DecayerCfg{
-		Resolution: 50 * time.Millisecond,
+		Resolution: TestResolution,
 		Clock:      mockClock,
 	}
 
