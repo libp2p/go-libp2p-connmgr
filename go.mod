@@ -7,6 +7,6 @@ require (
 	github.com/ipfs/go-detect-race v0.0.1
 	github.com/ipfs/go-log v1.0.4
 	github.com/libp2p/go-libp2p-core v0.5.5
-	github.com/multiformats/go-multiaddr v0.2.1
+	github.com/multiformats/go-multiaddr v0.2.2
 	github.com/stretchr/testify v1.4.0
 )
