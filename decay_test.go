@@ -314,7 +314,7 @@ func TestTagRemoval(t *testing.T) {
 	tag2, err := decay.RegisterDecayingTag("bop", TestResolution, connmgr.DecayFixed(1), connmgr.BumpOverwrite())
 	require.NoError(err)
 
-	// id1 has both tags; id1 only has the first tag.
+	// id1 has both tags; id2 only has the first tag.
 	_ = tag1.Bump(id1, 1000)
 	_ = tag2.Bump(id1, 1000)
 	_ = tag1.Bump(id2, 1000)
