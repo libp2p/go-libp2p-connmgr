@@ -283,7 +283,7 @@ func TestResolutionMisaligned(t *testing.T) {
 	// allow the background goroutine to process bumps.
 	<-time.After(500 * time.Millisecond)
 
-	// nothing has happened.
+	// first tick.
 	mockClock.Add(TestResolution)
 	require.Equal(1000, mgr.GetTagInfo(id).Tags["beep"])
 	require.Equal(1000, mgr.GetTagInfo(id).Tags["bop"])
@@ -299,6 +299,104 @@ func TestResolutionMisaligned(t *testing.T) {
 	require.Equal(999, mgr.GetTagInfo(id).Tags["bop"])
 
 	require.Equal(1997, mgr.GetTagInfo(id).Value)
+}
+
+func TestTagRemoval(t *testing.T) {
+	var (
+		id1, id2              = tu.RandPeerIDFatal(t), tu.RandPeerIDFatal(t)
+		mgr, decay, mockClock = testDecayTracker(t)
+		require               = require.New(t)
+	)
+
+	tag1, err := decay.RegisterDecayingTag("beep", TestResolution, connmgr.DecayFixed(1), connmgr.BumpOverwrite())
+	require.NoError(err)
+
+	tag2, err := decay.RegisterDecayingTag("bop", TestResolution, connmgr.DecayFixed(1), connmgr.BumpOverwrite())
+	require.NoError(err)
+
+	// id1 has both tags; id2 only has the first tag.
+	_ = tag1.Bump(id1, 1000)
+	_ = tag2.Bump(id1, 1000)
+	_ = tag1.Bump(id2, 1000)
+
+	// allow the background goroutine to process bumps.
+	<-time.After(500 * time.Millisecond)
+
+	// first tick.
+	mockClock.Add(TestResolution)
+	require.Equal(999, mgr.GetTagInfo(id1).Tags["beep"])
+	require.Equal(999, mgr.GetTagInfo(id1).Tags["bop"])
+	require.Equal(999, mgr.GetTagInfo(id2).Tags["beep"])
+
+	require.Equal(999*2, mgr.GetTagInfo(id1).Value)
+	require.Equal(999, mgr.GetTagInfo(id2).Value)
+
+	// remove tag1 from p1.
+	err = tag1.Remove(id1)
+
+	// allow the background goroutine to process the removal.
+	<-time.After(500 * time.Millisecond)
+	require.NoError(err)
+
+	// next tick. both peers only have 1 tag, both at 998 value.
+	mockClock.Add(TestResolution)
+	require.Zero(mgr.GetTagInfo(id1).Tags["beep"])
+	require.Equal(998, mgr.GetTagInfo(id1).Tags["bop"])
+	require.Equal(998, mgr.GetTagInfo(id2).Tags["beep"])
+
+	require.Equal(998, mgr.GetTagInfo(id1).Value)
+	require.Equal(998, mgr.GetTagInfo(id2).Value)
+
+	// remove tag1 from p1 again; no error.
+	err = tag1.Remove(id1)
+	require.NoError(err)
+}
+
+func TestTagClosure(t *testing.T) {
+	var (
+		id                    = tu.RandPeerIDFatal(t)
+		mgr, decay, mockClock = testDecayTracker(t)
+		require               = require.New(t)
+	)
+
+	tag1, err := decay.RegisterDecayingTag("beep", TestResolution, connmgr.DecayFixed(1), connmgr.BumpOverwrite())
+	require.NoError(err)
+
+	tag2, err := decay.RegisterDecayingTag("bop", TestResolution, connmgr.DecayFixed(1), connmgr.BumpOverwrite())
+	require.NoError(err)
+
+	_ = tag1.Bump(id, 1000)
+	_ = tag2.Bump(id, 1000)
+	// allow the background goroutine to process bumps.
+	<-time.After(500 * time.Millisecond)
+
+	// nothing has happened.
+	mockClock.Add(TestResolution)
+	require.Equal(999, mgr.GetTagInfo(id).Tags["beep"])
+	require.Equal(999, mgr.GetTagInfo(id).Tags["bop"])
+	require.Equal(999*2, mgr.GetTagInfo(id).Value)
+
+	// next tick; tag1 would've ticked.
+	mockClock.Add(TestResolution)
+	require.Equal(998, mgr.GetTagInfo(id).Tags["beep"])
+	require.Equal(998, mgr.GetTagInfo(id).Tags["bop"])
+	require.Equal(998*2, mgr.GetTagInfo(id).Value)
+
+	// close the tag.
+	err = tag1.Close()
+	require.NoError(err)
+
+	// allow the background goroutine to process the closure.
+	<-time.After(500 * time.Millisecond)
+	require.Equal(998, mgr.GetTagInfo(id).Value)
+
+	// a second closure should not error.
+	err = tag1.Close()
+	require.NoError(err)
+
+	// bumping a tag after it's been closed should error.
+	err = tag1.Bump(id, 5)
+	require.Error(err)
 }
 
 func testDecayTracker(tb testing.TB) (*BasicConnMgr, connmgr.Decayer, *clock.Mock) {
