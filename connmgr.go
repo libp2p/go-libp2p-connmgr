@@ -176,6 +176,23 @@ func (cm *BasicConnMgr) Unprotect(id peer.ID, tag string) (protected bool) {
 	return true
 }
 
+func (cm *BasicConnMgr) IsProtected(id peer.ID, tag string) (protected bool) {
+	cm.plk.Lock()
+	defer cm.plk.Unlock()
+
+	tags, ok := cm.protected[id]
+	if !ok {
+		return false
+	}
+
+	if tag == "" {
+		return true
+	}
+
+	_, protected = tags[tag]
+	return protected
+}
+
 // peerInfo stores metadata for a given peer.
 type peerInfo struct {
 	id       peer.ID
