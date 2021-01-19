@@ -48,6 +48,19 @@ func randConn(t testing.TB, discNotify func(network.Network, network.Conn)) netw
 	return &tconn{peer: pid, disconnectNotify: discNotify}
 }
 
+type tStream struct {
+	network.Stream
+	conn network.Conn
+}
+
+func (s *tStream) Conn() network.Conn {
+	return s.conn
+}
+
+func randStream(t testing.TB, c network.Conn) network.Stream {
+	return &tStream{conn: c}
+}
+
 // Make sure multiple trim calls block.
 func TestTrimBlocks(t *testing.T) {
 	cm := NewConnManager(200, 300, 0)
@@ -122,6 +135,45 @@ func TestTrimJoin(t *testing.T) {
 	time.Sleep(time.Millisecond)
 	cm.lastTrimMu.RUnlock()
 	wg.Wait()
+}
+
+func TestCloseStreamNotOpen(t *testing.T) {
+	copy := maxStreamOpenDuration
+	maxStreamOpenDuration = 100 * time.Millisecond
+	defer func() {
+		maxStreamOpenDuration = copy
+	}()
+
+	cm := NewConnManager(5, 8, 0)
+	not := cm.Notifee()
+
+	var conns []network.Conn
+	for i := 0; i < 8; i++ {
+		rc := randConn(t, nil)
+		conns = append(conns, rc)
+		not.Connected(nil, rc)
+	}
+
+	for i, c := range conns {
+		if i%3 == 0 {
+			not.OpenedStream(nil, randStream(t, c))
+		}
+	}
+
+	time.Sleep(1 * time.Second)
+	cm.TrimOpenConns(context.Background())
+
+	for i, c := range conns {
+		if i%3 == 0 {
+			if !c.(*tconn).closed {
+				t.Fatal("these should be closed")
+			}
+		} else {
+			if c.(*tconn).closed {
+				t.Fatal("these should NOT be closed")
+			}
+		}
+	}
 }
 
 func TestConnTrimming(t *testing.T) {

@@ -19,6 +19,8 @@ var SilencePeriod = 10 * time.Second
 
 var log = logging.Logger("connmgr")
 
+var maxStreamOpenDuration = 10 * time.Minute
+
 // BasicConnMgr is a ConnManager that trims connections whenever the count exceeds the
 // high watermark. New connections are given a grace period before they're subject
 // to trimming. Trims are automatically run on demand, only if the time from the
@@ -84,7 +86,7 @@ func (s *segment) tagInfoFor(p peer.ID) *peerInfo {
 		temp:      true,
 		tags:      make(map[string]int),
 		decaying:  make(map[*decayingTag]*connmgr.DecayingValue),
-		conns:     make(map[network.Conn]time.Time),
+		conns:     make(map[network.Conn]*connInfo),
 	}
 	s.peers[p] = pi
 	return pi
@@ -193,6 +195,11 @@ func (cm *BasicConnMgr) IsProtected(id peer.ID, tag string) (protected bool) {
 	return protected
 }
 
+type connInfo struct {
+	startTime      time.Time
+	lastStreamOpen time.Time
+}
+
 // peerInfo stores metadata for a given peer.
 type peerInfo struct {
 	id       peer.ID
@@ -202,7 +209,7 @@ type peerInfo struct {
 	value int  // cached sum of all tag values
 	temp  bool // this is a temporary entry holding early tags, and awaiting connections
 
-	conns map[network.Conn]time.Time // start time of each connection
+	conns map[network.Conn]*connInfo // start time and last stream open time of each connection.
 
 	firstSeen time.Time // timestamp when we began tracking this peer.
 }
@@ -359,9 +366,31 @@ func (cm *BasicConnMgr) getConnsToClose() []network.Conn {
 
 	target := ncandidates - cm.cfg.lowWater
 
-	// slightly overallocate because we may have more than one conns per peer
-	selected := make([]network.Conn, 0, target+10)
+	// overallocate because we may have more than one conns per peer
+	selected := make([]network.Conn, 0, 2*target)
+	seen := make(map[network.Conn]struct{})
 
+	// first select connections that haven't seen a stream since some time.
+	for _, inf := range candidates {
+		if target <= 0 {
+			break
+		}
+
+		// lock this to protect from concurrent modifications from connect/disconnect events
+		s := cm.segments.get(inf.id)
+		s.Lock()
+
+		for c, info := range inf.conns {
+			if !info.lastStreamOpen.IsZero() && time.Since(info.lastStreamOpen) > maxStreamOpenDuration {
+				selected = append(selected, c)
+				target--
+				seen[c] = struct{}{}
+			}
+		}
+		s.Unlock()
+	}
+
+	// now select remaining connections if we still haven't hit our target
 	for _, inf := range candidates {
 		if target <= 0 {
 			break
@@ -377,10 +406,12 @@ func (cm *BasicConnMgr) getConnsToClose() []network.Conn {
 			delete(s.peers, inf.id)
 		} else {
 			for c := range inf.conns {
-				selected = append(selected, c)
+				if _, ok := seen[c]; !ok {
+					selected = append(selected, c)
+					target--
+				}
 			}
 		}
-		target -= len(inf.conns)
 		s.Unlock()
 	}
 
@@ -412,8 +443,8 @@ func (cm *BasicConnMgr) GetTagInfo(p peer.ID) *connmgr.TagInfo {
 	for t, v := range pi.decaying {
 		out.Tags[t.name] = v.Value
 	}
-	for c, t := range pi.conns {
-		out.Conns[c.RemoteMultiaddr().String()] = t
+	for c, connInfo := range pi.conns {
+		out.Conns[c.RemoteMultiaddr().String()] = connInfo.startTime
 	}
 
 	return out
@@ -528,7 +559,7 @@ func (nn *cmNotifee) Connected(n network.Network, c network.Conn) {
 			firstSeen: time.Now(),
 			tags:      make(map[string]int),
 			decaying:  make(map[*decayingTag]*connmgr.DecayingValue),
-			conns:     make(map[network.Conn]time.Time),
+			conns:     make(map[network.Conn]*connInfo),
 		}
 		s.peers[id] = pinfo
 	} else if pinfo.temp {
@@ -545,7 +576,7 @@ func (nn *cmNotifee) Connected(n network.Network, c network.Conn) {
 		return
 	}
 
-	pinfo.conns[c] = time.Now()
+	pinfo.conns[c] = &connInfo{startTime: time.Now()}
 	atomic.AddInt32(&cm.connCount, 1)
 }
 
@@ -578,14 +609,38 @@ func (nn *cmNotifee) Disconnected(n network.Network, c network.Conn) {
 	atomic.AddInt32(&cm.connCount, -1)
 }
 
+// OpenedStream is called by notifiers to inform that a new libp2p stream has been opened on a connection.
+// The notifee updates the BasicConnMgr accordingly to update the time we last saw a stream on the connection
+// We then use this information when deciding which connections to trim.
+func (nn *cmNotifee) OpenedStream(_ network.Network, stream network.Stream) {
+	cm := nn.cm()
+
+	p := stream.Conn().RemotePeer()
+	s := cm.segments.get(p)
+	s.Lock()
+	defer s.Unlock()
+
+	cinf, ok := s.peers[p]
+	if !ok {
+		log.Error("received stream open notification for peer we are not tracking: ", p)
+		return
+	}
+
+	c := stream.Conn()
+	_, ok = cinf.conns[c]
+	if !ok {
+		log.Error("received stream open notification for conn we are not tracking: ", p)
+		return
+	}
+
+	cinf.conns[c].lastStreamOpen = time.Now()
+}
+
 // Listen is no-op in this implementation.
 func (nn *cmNotifee) Listen(n network.Network, addr ma.Multiaddr) {}
 
 // ListenClose is no-op in this implementation.
 func (nn *cmNotifee) ListenClose(n network.Network, addr ma.Multiaddr) {}
-
-// OpenedStream is no-op in this implementation.
-func (nn *cmNotifee) OpenedStream(network.Network, network.Stream) {}
 
 // ClosedStream is no-op in this implementation.
 func (nn *cmNotifee) ClosedStream(network.Network, network.Stream) {}
