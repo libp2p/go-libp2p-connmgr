@@ -198,6 +198,7 @@ func (cm *BasicConnMgr) IsProtected(id peer.ID, tag string) (protected bool) {
 type connInfo struct {
 	startTime      time.Time
 	lastStreamOpen time.Time
+	nStreams       int
 }
 
 // peerInfo stores metadata for a given peer.
@@ -370,7 +371,9 @@ func (cm *BasicConnMgr) getConnsToClose() []network.Conn {
 	selected := make([]network.Conn, 0, 2*target)
 	seen := make(map[network.Conn]struct{})
 
-	// first select connections that haven't seen a stream since some time.
+	// first select connections that are:
+	// i) older than 10 minutes but still haven't see a stream.
+	// ii) haven't seen a new stream since 10 minutes and have NO streams open.
 	for _, inf := range candidates {
 		if target <= 0 {
 			break
@@ -381,7 +384,15 @@ func (cm *BasicConnMgr) getConnsToClose() []network.Conn {
 		s.Lock()
 
 		for c, info := range inf.conns {
-			if !info.lastStreamOpen.IsZero() && time.Since(info.lastStreamOpen) > maxStreamOpenDuration {
+			// connections that are older than 10 minutes but still haven't see a stream.
+			if info.lastStreamOpen.IsZero() && time.Since(info.startTime) > maxStreamOpenDuration {
+				selected = append(selected, c)
+				target--
+				seen[c] = struct{}{}
+			}
+
+			// connections that haven't seen a new stream since 10 minutes and have NO streams open.
+			if !info.lastStreamOpen.IsZero() && time.Since(info.lastStreamOpen) > maxStreamOpenDuration && info.nStreams == 0 {
 				selected = append(selected, c)
 				target--
 				seen[c] = struct{}{}
@@ -610,7 +621,7 @@ func (nn *cmNotifee) Disconnected(n network.Network, c network.Conn) {
 }
 
 // OpenedStream is called by notifiers to inform that a new libp2p stream has been opened on a connection.
-// The notifee updates the BasicConnMgr accordingly to update the time we last saw a stream on the connection
+// The notifee updates the BasicConnMgr accordingly to update the number of streams we have open on a connection.
 // We then use this information when deciding which connections to trim.
 func (nn *cmNotifee) OpenedStream(_ network.Network, stream network.Stream) {
 	cm := nn.cm()
@@ -634,6 +645,32 @@ func (nn *cmNotifee) OpenedStream(_ network.Network, stream network.Stream) {
 	}
 
 	cinf.conns[c].lastStreamOpen = time.Now()
+	cinf.conns[c].nStreams++
+}
+
+// ClosedStream is called by notifiers to inform that an existing libp2p stream has been closed.
+func (nn *cmNotifee) ClosedStream(_ network.Network, stream network.Stream) {
+	cm := nn.cm()
+
+	p := stream.Conn().RemotePeer()
+	s := cm.segments.get(p)
+	s.Lock()
+	defer s.Unlock()
+
+	cinf, ok := s.peers[p]
+	if !ok {
+		log.Error("received stream close notification for peer we are not tracking: ", p)
+		return
+	}
+
+	c := stream.Conn()
+	_, ok = cinf.conns[c]
+	if !ok {
+		log.Error("received stream close notification for conn we are not tracking: ", p)
+		return
+	}
+
+	cinf.conns[c].nStreams--
 }
 
 // Listen is no-op in this implementation.
@@ -641,6 +678,3 @@ func (nn *cmNotifee) Listen(n network.Network, addr ma.Multiaddr) {}
 
 // ListenClose is no-op in this implementation.
 func (nn *cmNotifee) ListenClose(n network.Network, addr ma.Multiaddr) {}
-
-// ClosedStream is no-op in this implementation.
-func (nn *cmNotifee) ClosedStream(network.Network, network.Stream) {}

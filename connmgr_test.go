@@ -7,6 +7,7 @@ import (
 	"time"
 
 	detectrace "github.com/ipfs/go-detect-race"
+	"github.com/stretchr/testify/require"
 
 	"github.com/libp2p/go-libp2p-core/network"
 	"github.com/libp2p/go-libp2p-core/peer"
@@ -137,7 +138,37 @@ func TestTrimJoin(t *testing.T) {
 	wg.Wait()
 }
 
-func TestCloseStreamNotOpen(t *testing.T) {
+func TestCloseConnsWithNoStreams(t *testing.T) {
+	copy := maxStreamOpenDuration
+	maxStreamOpenDuration = 100 * time.Millisecond
+	defer func() {
+		maxStreamOpenDuration = copy
+	}()
+
+	cm := NewConnManager(5, 8, 0)
+	not := cm.Notifee()
+
+	var conns []network.Conn
+	for i := 0; i < 8; i++ {
+		rc := randConn(t, nil)
+		conns = append(conns, rc)
+		not.Connected(nil, rc)
+	}
+
+	time.Sleep(1 * time.Second)
+	cm.TrimOpenConns(context.Background())
+
+	nClosed := 0
+	// all conns are eligible for closing as they haven't seen a stream.
+	for _, c := range conns {
+		if c.(*tconn).closed {
+			nClosed++
+		}
+	}
+	require.Equalf(t, 3, nClosed, "expected 3 closed connections, got %d", nClosed)
+}
+
+func TestDontCloseConnsWithOpenStreams(t *testing.T) {
 	copy := maxStreamOpenDuration
 	maxStreamOpenDuration = 100 * time.Millisecond
 	defer func() {
@@ -163,17 +194,20 @@ func TestCloseStreamNotOpen(t *testing.T) {
 	time.Sleep(1 * time.Second)
 	cm.TrimOpenConns(context.Background())
 
+	nClosed := 0
 	for i, c := range conns {
 		if i%3 == 0 {
-			if !c.(*tconn).closed {
-				t.Fatal("these should be closed")
-			}
-		} else {
 			if c.(*tconn).closed {
 				t.Fatal("these should NOT be closed")
 			}
+		} else {
+			if c.(*tconn).closed {
+				nClosed++
+			}
 		}
 	}
+
+	require.Equalf(t, 3, nClosed, "expected 3 closed streams, got %d", nClosed)
 }
 
 func TestConnTrimming(t *testing.T) {
