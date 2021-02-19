@@ -19,7 +19,7 @@ var SilencePeriod = 10 * time.Second
 
 var log = logging.Logger("connmgr")
 
-var maxStreamOpenDuration = 10 * time.Minute
+var connCloseStreamTimeout = 10 * time.Minute
 
 // BasicConnMgr is a ConnManager that trims connections whenever the count exceeds the
 // high watermark. New connections are given a grace period before they're subject
@@ -321,10 +321,11 @@ func (cm *BasicConnMgr) getConnsToClose() []network.Conn {
 		return nil
 	}
 
+	now := time.Now()
 	npeers := cm.segments.countPeers()
 	candidates := make([]*peerInfo, 0, npeers)
 	ncandidates := 0
-	gracePeriodStart := time.Now().Add(-cm.cfg.gracePeriod)
+	gracePeriodStart := now.Add(-cm.cfg.gracePeriod)
 
 	cm.plk.RLock()
 	for _, s := range cm.segments {
@@ -385,14 +386,14 @@ func (cm *BasicConnMgr) getConnsToClose() []network.Conn {
 
 		for c, info := range inf.conns {
 			// connections that are older than 10 minutes but still haven't see a stream.
-			if info.lastStreamOpen.IsZero() && time.Since(info.startTime) > maxStreamOpenDuration {
+			if info.lastStreamOpen.IsZero() && now.Sub(info.startTime) > connCloseStreamTimeout {
 				selected = append(selected, c)
 				target--
 				seen[c] = struct{}{}
 			}
 
 			// connections that haven't seen a new stream since 10 minutes and have NO streams open.
-			if !info.lastStreamOpen.IsZero() && time.Since(info.lastStreamOpen) > maxStreamOpenDuration && info.nStreams == 0 {
+			if info.nStreams == 0 && !info.lastStreamOpen.IsZero() && now.Sub(info.lastStreamOpen) > connCloseStreamTimeout {
 				selected = append(selected, c)
 				target--
 				seen[c] = struct{}{}
@@ -638,14 +639,14 @@ func (nn *cmNotifee) OpenedStream(_ network.Network, stream network.Stream) {
 	}
 
 	c := stream.Conn()
-	_, ok = cinf.conns[c]
+	connInfo, ok := cinf.conns[c]
 	if !ok {
 		log.Error("received stream open notification for conn we are not tracking: ", p)
 		return
 	}
 
-	cinf.conns[c].lastStreamOpen = time.Now()
-	cinf.conns[c].nStreams++
+	connInfo.lastStreamOpen = time.Now()
+	connInfo.nStreams++
 }
 
 // ClosedStream is called by notifiers to inform that an existing libp2p stream has been closed.
@@ -664,13 +665,13 @@ func (nn *cmNotifee) ClosedStream(_ network.Network, stream network.Stream) {
 	}
 
 	c := stream.Conn()
-	_, ok = cinf.conns[c]
+	connInfo, ok := cinf.conns[c]
 	if !ok {
 		log.Error("received stream close notification for conn we are not tracking: ", p)
 		return
 	}
 
-	cinf.conns[c].nStreams--
+	connInfo.nStreams--
 }
 
 // Listen is no-op in this implementation.

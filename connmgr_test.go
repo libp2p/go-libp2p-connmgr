@@ -139,10 +139,10 @@ func TestTrimJoin(t *testing.T) {
 }
 
 func TestCloseConnsWithNoStreams(t *testing.T) {
-	copy := maxStreamOpenDuration
-	maxStreamOpenDuration = 100 * time.Millisecond
+	copy := connCloseStreamTimeout
+	connCloseStreamTimeout = 100 * time.Millisecond
 	defer func() {
-		maxStreamOpenDuration = copy
+		connCloseStreamTimeout = copy
 	}()
 
 	cm := NewConnManager(5, 8, 0)
@@ -169,10 +169,10 @@ func TestCloseConnsWithNoStreams(t *testing.T) {
 }
 
 func TestDontCloseConnsWithOpenStreams(t *testing.T) {
-	copy := maxStreamOpenDuration
-	maxStreamOpenDuration = 100 * time.Millisecond
+	copy := connCloseStreamTimeout
+	connCloseStreamTimeout = 100 * time.Millisecond
 	defer func() {
-		maxStreamOpenDuration = copy
+		connCloseStreamTimeout = copy
 	}()
 
 	cm := NewConnManager(5, 8, 0)
