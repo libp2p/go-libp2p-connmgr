@@ -101,8 +101,7 @@ func (d *decayer) RegisterDecayingTag(name string, interval time.Duration, decay
 	d.tagsMu.Lock()
 	defer d.tagsMu.Unlock()
 
-	tag, ok := d.knownTags[name]
-	if ok {
+	if _, ok := d.knownTags[name]; ok {
 		return nil, fmt.Errorf("decaying tag with name %s already exists", name)
 	}
 
@@ -118,7 +117,7 @@ func (d *decayer) RegisterDecayingTag(name string, interval time.Duration, decay
 	}
 
 	lastTick := d.lastTick.Load().(time.Time)
-	tag = &decayingTag{
+	tag := &decayingTag{
 		trkr:     d,
 		name:     name,
 		interval: interval,

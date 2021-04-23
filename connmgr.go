@@ -286,10 +286,8 @@ func (cm *BasicConnMgr) trim() {
 	}
 
 	// do the actual trim.
-	defer log.EventBegin(cm.ctx, "connCleanup").Done()
 	for _, c := range cm.getConnsToClose() {
 		log.Info("closing conn: ", c.RemotePeer())
-		log.Event(cm.ctx, "closeConn", c.RemotePeer())
 		c.Close()
 	}
 

@@ -611,7 +611,6 @@ func TestPeerProtectionMultipleTags(t *testing.T) {
 	// add 2 more connections, sending the connection manager overboard again.
 	for i := 0; i < 2; i++ {
 		rc := randConn(t, not.Disconnected)
-		conns = append(conns, rc)
 		not.Connected(nil, rc)
 		cm.TagPeer(rc.RemotePeer(), "test", 20)
 	}
@@ -631,7 +630,6 @@ func TestPeerProtectionMultipleTags(t *testing.T) {
 	// add 2 more connections, sending the connection manager overboard again.
 	for i := 0; i < 2; i++ {
 		rc := randConn(t, not.Disconnected)
-		conns = append(conns, rc)
 		not.Connected(nil, rc)
 		cm.TagPeer(rc.RemotePeer(), "test", 20)
 	}

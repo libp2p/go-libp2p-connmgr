@@ -9,7 +9,7 @@ import (
 )
 
 func randomConns(tb testing.TB) (c [5000]network.Conn) {
-	for i, _ := range c {
+	for i := range c {
 		c[i] = randConn(tb, nil)
 	}
 	return c
