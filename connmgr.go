@@ -238,9 +238,9 @@ func (cm *BasicConnMgr) TrimOpenConns(ctx context.Context) {
 }
 
 func (cm *BasicConnMgr) background() {
-	interval := cm.gracePeriod / 2
-	if interval < cm.silencePeriod {
-		interval = cm.silencePeriod
+	interval := cm.cfg.gracePeriod / 2
+	if interval < cm.cfg.silencePeriod {
+		interval = cm.cfg.silencePeriod
 	}
 	if interval < 10*time.Second {
 		interval = 10 * time.Second
