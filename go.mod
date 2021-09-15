@@ -1,6 +1,6 @@
 module github.com/libp2p/go-libp2p-connmgr
 
-go 1.15
+go 1.16
 
 require (
 	github.com/benbjohnson/clock v1.0.2
