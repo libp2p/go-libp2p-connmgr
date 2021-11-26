@@ -99,20 +99,17 @@ func (s *segment) tagInfoFor(p peer.ID) *peerInfo {
 //   their connections terminated) until 'low watermark' peers remain.
 // * grace is the amount of time a newly opened connection is given before it becomes
 //   subject to pruning.
-func NewConnManager(low, hi int, grace time.Duration, opts ...Option) *BasicConnMgr {
-	ctx, cancel := context.WithCancel(context.Background())
-
+func NewConnManager(low, hi int, grace time.Duration, opts ...Option) (*BasicConnMgr, error) {
 	cfg := &config{
 		highWater:     hi,
 		lowWater:      low,
 		gracePeriod:   grace,
 		silencePeriod: SilencePeriod,
 	}
-
 	for _, o := range opts {
-		// TODO we're ignoring errors from options because we have no way to
-		// return them, or otherwise act on them.
-		_ = o(cfg)
+		if err := o(cfg); err != nil {
+			return nil, err
+		}
 	}
 
 	if cfg.decayer == nil {
@@ -125,8 +122,6 @@ func NewConnManager(low, hi int, grace time.Duration, opts ...Option) *BasicConn
 		trimRunningCh: make(chan struct{}, 1),
 		trimTrigger:   make(chan chan<- struct{}),
 		protected:     make(map[peer.ID]map[string]struct{}, 16),
-		ctx:           ctx,
-		cancel:        cancel,
 		segments: func() (ret segments) {
 			for i := range ret {
 				ret[i] = &segment{
@@ -136,13 +131,14 @@ func NewConnManager(low, hi int, grace time.Duration, opts ...Option) *BasicConn
 			return ret
 		}(),
 	}
+	cm.ctx, cm.cancel = context.WithCancel(context.Background())
 
 	decay, _ := NewDecayer(cfg.decayer, cm)
 	cm.decayer = decay
 
 	cm.refCount.Add(1)
 	go cm.background()
-	return cm
+	return cm, nil
 }
 
 func (cm *BasicConnMgr) Close() error {
