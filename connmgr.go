@@ -43,8 +43,9 @@ type BasicConnMgr struct {
 	lastTrimMu sync.RWMutex
 	lastTrim   time.Time
 
-	ctx    context.Context
-	cancel func()
+	refCount sync.WaitGroup
+	ctx      context.Context
+	cancel   func()
 }
 
 var (
@@ -137,15 +138,17 @@ func NewConnManager(low, hi int, grace time.Duration, opts ...Option) *BasicConn
 	decay, _ := NewDecayer(cfg.decayer, cm)
 	cm.decayer = decay
 
+	cm.refCount.Add(1)
 	go cm.background()
 	return cm
 }
 
 func (cm *BasicConnMgr) Close() error {
+	cm.cancel()
 	if err := cm.decayer.Close(); err != nil {
 		return err
 	}
-	cm.cancel()
+	cm.refCount.Wait()
 	return nil
 }
 
@@ -238,6 +241,8 @@ func (cm *BasicConnMgr) TrimOpenConns(ctx context.Context) {
 }
 
 func (cm *BasicConnMgr) background() {
+	defer cm.refCount.Done()
+
 	interval := cm.cfg.gracePeriod / 2
 	if interval < cm.cfg.silencePeriod {
 		interval = cm.cfg.silencePeriod
