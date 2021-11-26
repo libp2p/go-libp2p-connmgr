@@ -29,7 +29,7 @@ var log = logging.Logger("connmgr")
 type BasicConnMgr struct {
 	*decayer
 
-	cfg      *BasicConnManagerConfig
+	cfg      *config
 	segments segments
 
 	plk       sync.RWMutex
@@ -100,7 +100,7 @@ func (s *segment) tagInfoFor(p peer.ID) *peerInfo {
 func NewConnManager(low, hi int, grace time.Duration, opts ...Option) *BasicConnMgr {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	cfg := &BasicConnManagerConfig{
+	cfg := &config{
 		highWater:     hi,
 		lowWater:      low,
 		gracePeriod:   grace,
