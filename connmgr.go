@@ -13,6 +13,7 @@ import (
 
 	logging "github.com/ipfs/go-log/v2"
 	ma "github.com/multiformats/go-multiaddr"
+	"github.com/raulk/go-watchdog"
 )
 
 var log = logging.Logger("connmgr")
@@ -41,9 +42,10 @@ type BasicConnMgr struct {
 	lastTrimMu sync.RWMutex
 	lastTrim   time.Time
 
-	refCount sync.WaitGroup
-	ctx      context.Context
-	cancel   func()
+	refCount           sync.WaitGroup
+	ctx                context.Context
+	cancel             func()
+	unregisterWatchdog func()
 }
 
 var (
@@ -127,6 +129,9 @@ func NewConnManager(low, hi int, opts ...Option) (*BasicConnMgr, error) {
 	}
 	cm.ctx, cm.cancel = context.WithCancel(context.Background())
 
+	// When we're running low on memory, immediately trigger a trim.
+	cm.unregisterWatchdog = watchdog.RegisterPostGCNotifee(cm.memoryEmergency)
+
 	decay, _ := NewDecayer(cfg.decayer, cm)
 	cm.decayer = decay
 
@@ -135,8 +140,40 @@ func NewConnManager(low, hi int, opts ...Option) (*BasicConnMgr, error) {
 	return cm, nil
 }
 
+// memoryEmergency is run when we run low on memory.
+// Close half of the connections, as quickly as possible.
+// We don't pay attention to the silence period or the grace period.
+// We try to not kill protected connections, but if that turns out to be necessary, not connection is safe!
+func (cm *BasicConnMgr) memoryEmergency() {
+	log.Info("Low on memory. Closing half of our connections.")
+	target := int(atomic.LoadInt32(&cm.connCount) / 2)
+	ch := make(chan struct{})
+	select {
+	case cm.trimTrigger <- ch:
+	case <-cm.ctx.Done():
+	}
+
+	// Wait for the trim.
+	select {
+	case <-ch:
+	case <-cm.ctx.Done():
+	}
+
+	// Trim connections without paying attention to the silence period.
+	for _, c := range cm.getConnsToCloseEmergency(target) {
+		log.Infow("low on memory. closing conn", "peer", c.RemotePeer())
+		c.Close()
+	}
+
+	// finally, update the last trim time.
+	cm.lastTrimMu.Lock()
+	cm.lastTrim = time.Now()
+	cm.lastTrimMu.Unlock()
+}
+
 func (cm *BasicConnMgr) Close() error {
 	cm.cancel()
+	cm.unregisterWatchdog()
 	if err := cm.decayer.Close(); err != nil {
 		return err
 	}
@@ -200,6 +237,20 @@ type peerInfo struct {
 	conns map[network.Conn]time.Time // start time of each connection
 
 	firstSeen time.Time // timestamp when we began tracking this peer.
+}
+
+type peerInfos []peerInfo
+
+func (p peerInfos) SortByValue() {
+	sort.Slice(p, func(i, j int) bool {
+		left, right := p[i], p[j]
+		// temporary peers are preferred for pruning.
+		if left.temp != right.temp {
+			return left.temp
+		}
+		// otherwise, compare by value.
+		return left.value < right.value
+	})
 }
 
 // TrimOpenConns closes the connections of as many peers as needed to make the peer count
@@ -276,10 +327,11 @@ func (cm *BasicConnMgr) background() {
 	}
 }
 
+// trim starts the trim, if the last trim happened before the configured silence period.
 func (cm *BasicConnMgr) trim() {
 	// do the actual trim.
 	for _, c := range cm.getConnsToClose() {
-		log.Info("closing conn: ", c.RemotePeer())
+		log.Infow("closing conn", "peer", c.RemotePeer())
 		c.Close()
 	}
 
@@ -287,6 +339,68 @@ func (cm *BasicConnMgr) trim() {
 	cm.lastTrimMu.Lock()
 	cm.lastTrim = time.Now()
 	cm.lastTrimMu.Unlock()
+}
+
+func (cm *BasicConnMgr) getConnsToCloseEmergency(target int) []network.Conn {
+	npeers := cm.segments.countPeers()
+	candidates := make(peerInfos, 0, npeers)
+
+	cm.plk.RLock()
+	for _, s := range cm.segments {
+		s.Lock()
+		for id, inf := range s.peers {
+			if _, ok := cm.protected[id]; ok {
+				// skip over protected peer.
+				continue
+			}
+			candidates = append(candidates, *inf)
+		}
+		s.Unlock()
+	}
+	cm.plk.RUnlock()
+
+	// Sort peers according to their value.
+	candidates.SortByValue()
+
+	selected := make([]network.Conn, 0, target+10)
+	for _, inf := range candidates {
+		if target <= 0 {
+			break
+		}
+		for c := range inf.conns {
+			selected = append(selected, c)
+		}
+		target -= len(inf.conns)
+	}
+	if len(selected) >= target {
+		// We found enough connections that were not protected.
+		return selected
+	}
+
+	// We didn't find enough unprotected connections.
+	// We have no choice but to kill some protected connections.
+	candidates = candidates[:0]
+	cm.plk.RLock()
+	for _, s := range cm.segments {
+		s.Lock()
+		for _, inf := range s.peers {
+			candidates = append(candidates, *inf)
+		}
+		s.Unlock()
+	}
+	cm.plk.RUnlock()
+
+	candidates.SortByValue()
+	for _, inf := range candidates {
+		if target <= 0 {
+			break
+		}
+		for c := range inf.conns {
+			selected = append(selected, c)
+		}
+		target -= len(inf.conns)
+	}
+	return selected
 }
 
 // getConnsToClose runs the heuristics described in TrimOpenConns and returns the
@@ -302,7 +416,7 @@ func (cm *BasicConnMgr) getConnsToClose() []network.Conn {
 		return nil
 	}
 
-	candidates := make([]peerInfo, 0, cm.segments.countPeers())
+	candidates := make(peerInfos, 0, cm.segments.countPeers())
 	var ncandidates int
 	gracePeriodStart := time.Now().Add(-cm.cfg.gracePeriod)
 
@@ -337,15 +451,7 @@ func (cm *BasicConnMgr) getConnsToClose() []network.Conn {
 	}
 
 	// Sort peers according to their value.
-	sort.Slice(candidates, func(i, j int) bool {
-		left, right := candidates[i], candidates[j]
-		// temporary peers are preferred for pruning.
-		if left.temp != right.temp {
-			return left.temp
-		}
-		// otherwise, compare by value.
-		return left.value < right.value
-	})
+	candidates.SortByValue()
 
 	target := ncandidates - cm.cfg.lowWater
 
