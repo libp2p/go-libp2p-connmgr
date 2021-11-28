@@ -17,6 +17,8 @@ import (
 
 var SilencePeriod = 10 * time.Second
 
+var minCleanupInterval = 10 * time.Second
+
 var log = logging.Logger("connmgr")
 
 // BasicConnMgr is a ConnManager that trims connections whenever the count exceeds the
@@ -247,8 +249,8 @@ func (cm *BasicConnMgr) background() {
 	if interval < cm.cfg.silencePeriod {
 		interval = cm.cfg.silencePeriod
 	}
-	if interval < 10*time.Second {
-		interval = 10 * time.Second
+	if interval < minCleanupInterval {
+		interval = minCleanupInterval
 	}
 
 	ticker := time.NewTicker(interval)

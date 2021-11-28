@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	detectrace "github.com/ipfs/go-detect-race"
 
 	"github.com/libp2p/go-libp2p-core/network"
@@ -51,6 +53,7 @@ func randConn(t testing.TB, discNotify func(network.Network, network.Conn)) netw
 // Make sure multiple trim calls block.
 func TestTrimBlocks(t *testing.T) {
 	cm := NewConnManager(200, 300, 0)
+	defer cm.Close()
 
 	cm.lastTrimMu.RLock()
 
@@ -79,6 +82,7 @@ func TestTrimBlocks(t *testing.T) {
 func TestTrimCancels(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cm := NewConnManager(200, 300, 0)
+	defer cm.Close()
 
 	cm.lastTrimMu.RLock()
 	defer cm.lastTrimMu.RUnlock()
@@ -103,6 +107,7 @@ func TestTrimClosed(t *testing.T) {
 // Make sure joining an existing trim works.
 func TestTrimJoin(t *testing.T) {
 	cm := NewConnManager(200, 300, 0)
+	defer cm.Close()
 	cm.lastTrimMu.RLock()
 	var wg sync.WaitGroup
 	wg.Add(3)
@@ -126,6 +131,7 @@ func TestTrimJoin(t *testing.T) {
 
 func TestConnTrimming(t *testing.T) {
 	cm := NewConnManager(200, 300, 0)
+	defer cm.Close()
 	not := cm.Notifee()
 
 	var conns []network.Conn
@@ -162,39 +168,47 @@ func TestConnTrimming(t *testing.T) {
 }
 
 func TestConnsToClose(t *testing.T) {
-	cm := NewConnManager(0, 10, 0)
-	conns := cm.getConnsToClose()
-	if conns != nil {
-		t.Fatal("expected no connections")
+	addConns := func(cm *BasicConnMgr, n int) {
+		not := cm.Notifee()
+		for i := 0; i < n; i++ {
+			conn := randConn(t, nil)
+			not.Connected(nil, conn)
+		}
 	}
 
-	cm = NewConnManager(10, 0, 0)
-	conns = cm.getConnsToClose()
-	if conns != nil {
-		t.Fatal("expected no connections")
-	}
+	t.Run("below hi limit", func(t *testing.T) {
+		cm := NewConnManager(0, 10, 0)
+		defer cm.Close()
+		addConns(cm, 5)
+		require.Empty(t, cm.getConnsToClose())
+	})
 
-	cm = NewConnManager(1, 1, 0)
-	conns = cm.getConnsToClose()
-	if conns != nil {
-		t.Fatal("expected no connections")
-	}
+	t.Run("below low limit", func(t *testing.T) {
+		cm := NewConnManager(10, 0, 0)
+		defer cm.Close()
+		addConns(cm, 5)
+		require.Empty(t, cm.getConnsToClose())
+	})
 
-	cm = NewConnManager(1, 1, time.Duration(10*time.Minute))
-	not := cm.Notifee()
-	for i := 0; i < 5; i++ {
-		conn := randConn(t, nil)
-		not.Connected(nil, conn)
-	}
-	conns = cm.getConnsToClose()
-	if len(conns) != 0 {
-		t.Fatal("expected no connections")
-	}
+	t.Run("below low and hi limit", func(t *testing.T) {
+		cm := NewConnManager(1, 1, 0)
+		defer cm.Close()
+		addConns(cm, 1)
+		require.Empty(t, cm.getConnsToClose())
+	})
+
+	t.Run("within silence period", func(t *testing.T) {
+		cm := NewConnManager(1, 1, time.Duration(10*time.Minute))
+		defer cm.Close()
+		addConns(cm, 1)
+		require.Empty(t, cm.getConnsToClose())
+	})
 }
 
 func TestGetTagInfo(t *testing.T) {
 	start := time.Now()
 	cm := NewConnManager(1, 1, time.Duration(10*time.Minute))
+	defer cm.Close()
 	not := cm.Notifee()
 	conn := randConn(t, nil)
 	not.Connected(nil, conn)
@@ -265,6 +279,7 @@ func TestGetTagInfo(t *testing.T) {
 
 func TestTagPeerNonExistant(t *testing.T) {
 	cm := NewConnManager(1, 1, time.Duration(10*time.Minute))
+	defer cm.Close()
 
 	id := tu.RandPeerIDFatal(t)
 	cm.TagPeer(id, "test", 1)
@@ -276,6 +291,7 @@ func TestTagPeerNonExistant(t *testing.T) {
 
 func TestUntagPeer(t *testing.T) {
 	cm := NewConnManager(1, 1, time.Duration(10*time.Minute))
+	defer cm.Close()
 	not := cm.Notifee()
 	conn := randConn(t, nil)
 	not.Connected(nil, conn)
@@ -307,6 +323,7 @@ func TestGetInfo(t *testing.T) {
 	start := time.Now()
 	gp := time.Duration(10 * time.Minute)
 	cm := NewConnManager(1, 5, gp)
+	defer cm.Close()
 	not := cm.Notifee()
 	conn := randConn(t, nil)
 	not.Connected(nil, conn)
@@ -334,6 +351,7 @@ func TestGetInfo(t *testing.T) {
 func TestDoubleConnection(t *testing.T) {
 	gp := time.Duration(10 * time.Minute)
 	cm := NewConnManager(1, 5, gp)
+	defer cm.Close()
 	not := cm.Notifee()
 	conn := randConn(t, nil)
 	not.Connected(nil, conn)
@@ -350,6 +368,7 @@ func TestDoubleConnection(t *testing.T) {
 func TestDisconnected(t *testing.T) {
 	gp := time.Duration(10 * time.Minute)
 	cm := NewConnManager(1, 5, gp)
+	defer cm.Close()
 	not := cm.Notifee()
 	conn := randConn(t, nil)
 	not.Connected(nil, conn)
@@ -387,6 +406,7 @@ func TestGracePeriod(t *testing.T) {
 
 	SilencePeriod = 0
 	cm := NewConnManager(10, 20, 100*time.Millisecond)
+	defer cm.Close()
 	SilencePeriod = 10 * time.Second
 
 	not := cm.Notifee()
@@ -444,6 +464,7 @@ func TestQuickBurstRespectsSilencePeriod(t *testing.T) {
 	}
 
 	cm := NewConnManager(10, 20, 0)
+	defer cm.Close()
 	not := cm.Notifee()
 
 	var conns []network.Conn
@@ -480,6 +501,7 @@ func TestPeerProtectionSingleTag(t *testing.T) {
 
 	SilencePeriod = 0
 	cm := NewConnManager(19, 20, 0)
+	defer cm.Close()
 	SilencePeriod = 10 * time.Second
 
 	not := cm.Notifee()
@@ -567,6 +589,7 @@ func TestPeerProtectionMultipleTags(t *testing.T) {
 
 	SilencePeriod = 0
 	cm := NewConnManager(19, 20, 0)
+	defer cm.Close()
 	SilencePeriod = 10 * time.Second
 
 	not := cm.Notifee()
@@ -650,6 +673,7 @@ func TestPeerProtectionMultipleTags(t *testing.T) {
 func TestPeerProtectionIdempotent(t *testing.T) {
 	SilencePeriod = 0
 	cm := NewConnManager(10, 20, 0)
+	defer cm.Close()
 	SilencePeriod = 10 * time.Second
 
 	id, _ := tu.RandPeerID()
@@ -681,6 +705,8 @@ func TestPeerProtectionIdempotent(t *testing.T) {
 
 func TestUpsertTag(t *testing.T) {
 	cm := NewConnManager(1, 1, time.Duration(10*time.Minute))
+	defer cm.Close()
+
 	not := cm.Notifee()
 	conn := randConn(t, nil)
 	rp := conn.RemotePeer()
@@ -737,6 +763,7 @@ func TestTemporaryEntriesClearedFirst(t *testing.T) {
 
 func TestTemporaryEntryConvertedOnConnection(t *testing.T) {
 	cm := NewConnManager(1, 1, 0)
+	defer cm.Close()
 
 	conn := randConn(t, nil)
 	cm.TagPeer(conn.RemotePeer(), "test", 20)
@@ -752,5 +779,22 @@ func TestTemporaryEntryConvertedOnConnection(t *testing.T) {
 
 	if ti.value != 20 || ti.temp {
 		t.Fatal("expected a non-temporary tag with value 20")
+	}
+}
+
+// see https://github.com/libp2p/go-libp2p-connmgr/issues/82
+func TestConcurrentCleanupAndTagging(t *testing.T) {
+	origMinCleanupInterval := minCleanupInterval
+	t.Cleanup(func() { minCleanupInterval = origMinCleanupInterval })
+	minCleanupInterval = time.Millisecond
+
+	SilencePeriod = 0
+	cm := NewConnManager(1, 1, 0)
+	defer cm.Close()
+	SilencePeriod = 10 * time.Second
+
+	for i := 0; i < 1000; i++ {
+		conn := randConn(t, nil)
+		cm.TagPeer(conn.RemotePeer(), "test", 20)
 	}
 }
