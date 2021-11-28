@@ -411,6 +411,10 @@ func testDecayTracker(tb testing.TB) (*BasicConnMgr, connmgr.Decayer, *clock.Moc
 	if !ok {
 		tb.Fatalf("connmgr does not support decay")
 	}
+	tb.Cleanup(func() {
+		mgr.Close()
+		decay.Close()
+	})
 
 	return mgr, decay, mockClock
 }
