@@ -406,7 +406,7 @@ func testDecayTracker(tb testing.TB) (*BasicConnMgr, connmgr.Decayer, *clock.Moc
 		Clock:      mockClock,
 	}
 
-	mgr, err := NewConnManager(10, 10, 1*time.Second, DecayerConfig(cfg))
+	mgr, err := NewConnManager(10, 10, WithGracePeriod(time.Second), DecayerConfig(cfg))
 	require.NoError(tb, err)
 	decay, ok := connmgr.SupportsDecay(mgr)
 	if !ok {
