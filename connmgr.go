@@ -286,16 +286,6 @@ func (cm *BasicConnMgr) background() {
 }
 
 func (cm *BasicConnMgr) trim() {
-	cm.lastTrimMu.RLock()
-	// read the last trim time under the lock
-	lastTrim := cm.lastTrim
-	cm.lastTrimMu.RUnlock()
-
-	// skip this attempt to trim if the last one just took place.
-	if time.Since(lastTrim) < cm.cfg.silencePeriod {
-		return
-	}
-
 	// do the actual trim.
 	for _, c := range cm.getConnsToClose() {
 		log.Info("closing conn: ", c.RemotePeer())
