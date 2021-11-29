@@ -6,15 +6,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
-	detectrace "github.com/ipfs/go-detect-race"
-
 	"github.com/libp2p/go-libp2p-core/network"
 	"github.com/libp2p/go-libp2p-core/peer"
 
 	tu "github.com/libp2p/go-libp2p-core/test"
 	ma "github.com/multiformats/go-multiaddr"
+
+	detectrace "github.com/ipfs/go-detect-race"
+	"github.com/stretchr/testify/require"
 )
 
 type tconn struct {
@@ -52,7 +51,8 @@ func randConn(t testing.TB, discNotify func(network.Network, network.Conn)) netw
 
 // Make sure multiple trim calls block.
 func TestTrimBlocks(t *testing.T) {
-	cm := NewConnManager(200, 300, 0)
+	cm, err := NewConnManager(200, 300, 0)
+	require.NoError(t, err)
 	defer cm.Close()
 
 	cm.lastTrimMu.RLock()
@@ -80,9 +80,10 @@ func TestTrimBlocks(t *testing.T) {
 
 // Make sure we return from trim when the context is canceled.
 func TestTrimCancels(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cm := NewConnManager(200, 300, 0)
+	cm, err := NewConnManager(200, 300, 0)
+	require.NoError(t, err)
 	defer cm.Close()
+	ctx, cancel := context.WithCancel(context.Background())
 
 	cm.lastTrimMu.RLock()
 	defer cm.lastTrimMu.RUnlock()
@@ -99,15 +100,18 @@ func TestTrimCancels(t *testing.T) {
 
 // Make sure trim returns when closed.
 func TestTrimClosed(t *testing.T) {
-	cm := NewConnManager(200, 300, 0)
-	cm.Close()
+	cm, err := NewConnManager(200, 300, 0)
+	require.NoError(t, err)
+	require.NoError(t, cm.Close())
 	cm.TrimOpenConns(context.Background())
 }
 
 // Make sure joining an existing trim works.
 func TestTrimJoin(t *testing.T) {
-	cm := NewConnManager(200, 300, 0)
+	cm, err := NewConnManager(200, 300, 0)
+	require.NoError(t, err)
 	defer cm.Close()
+
 	cm.lastTrimMu.RLock()
 	var wg sync.WaitGroup
 	wg.Add(3)
@@ -130,7 +134,8 @@ func TestTrimJoin(t *testing.T) {
 }
 
 func TestConnTrimming(t *testing.T) {
-	cm := NewConnManager(200, 300, 0)
+	cm, err := NewConnManager(200, 300, 0)
+	require.NoError(t, err)
 	defer cm.Close()
 	not := cm.Notifee()
 
@@ -177,28 +182,32 @@ func TestConnsToClose(t *testing.T) {
 	}
 
 	t.Run("below hi limit", func(t *testing.T) {
-		cm := NewConnManager(0, 10, 0)
+		cm, err := NewConnManager(0, 10, 0)
+		require.NoError(t, err)
 		defer cm.Close()
 		addConns(cm, 5)
 		require.Empty(t, cm.getConnsToClose())
 	})
 
 	t.Run("below low limit", func(t *testing.T) {
-		cm := NewConnManager(10, 0, 0)
+		cm, err := NewConnManager(10, 0, 0)
+		require.NoError(t, err)
 		defer cm.Close()
 		addConns(cm, 5)
 		require.Empty(t, cm.getConnsToClose())
 	})
 
 	t.Run("below low and hi limit", func(t *testing.T) {
-		cm := NewConnManager(1, 1, 0)
+		cm, err := NewConnManager(1, 1, 0)
+		require.NoError(t, err)
 		defer cm.Close()
 		addConns(cm, 1)
 		require.Empty(t, cm.getConnsToClose())
 	})
 
 	t.Run("within silence period", func(t *testing.T) {
-		cm := NewConnManager(1, 1, time.Duration(10*time.Minute))
+		cm, err := NewConnManager(1, 1, time.Duration(10*time.Minute))
+		require.NoError(t, err)
 		defer cm.Close()
 		addConns(cm, 1)
 		require.Empty(t, cm.getConnsToClose())
@@ -207,8 +216,10 @@ func TestConnsToClose(t *testing.T) {
 
 func TestGetTagInfo(t *testing.T) {
 	start := time.Now()
-	cm := NewConnManager(1, 1, time.Duration(10*time.Minute))
+	cm, err := NewConnManager(1, 1, time.Duration(10*time.Minute))
+	require.NoError(t, err)
 	defer cm.Close()
+
 	not := cm.Notifee()
 	conn := randConn(t, nil)
 	not.Connected(nil, conn)
@@ -278,7 +289,8 @@ func TestGetTagInfo(t *testing.T) {
 }
 
 func TestTagPeerNonExistant(t *testing.T) {
-	cm := NewConnManager(1, 1, time.Duration(10*time.Minute))
+	cm, err := NewConnManager(1, 1, time.Duration(10*time.Minute))
+	require.NoError(t, err)
 	defer cm.Close()
 
 	id := tu.RandPeerIDFatal(t)
@@ -290,9 +302,11 @@ func TestTagPeerNonExistant(t *testing.T) {
 }
 
 func TestUntagPeer(t *testing.T) {
-	cm := NewConnManager(1, 1, time.Duration(10*time.Minute))
+	cm, err := NewConnManager(1, 1, time.Duration(10*time.Minute))
+	require.NoError(t, err)
 	defer cm.Close()
 	not := cm.Notifee()
+
 	conn := randConn(t, nil)
 	not.Connected(nil, conn)
 	rp := conn.RemotePeer()
@@ -321,8 +335,9 @@ func TestUntagPeer(t *testing.T) {
 
 func TestGetInfo(t *testing.T) {
 	start := time.Now()
-	gp := time.Duration(10 * time.Minute)
-	cm := NewConnManager(1, 5, gp)
+	const gp = 10 * time.Minute
+	cm, err := NewConnManager(1, 5, gp)
+	require.NoError(t, err)
 	defer cm.Close()
 	not := cm.Notifee()
 	conn := randConn(t, nil)
@@ -349,8 +364,9 @@ func TestGetInfo(t *testing.T) {
 }
 
 func TestDoubleConnection(t *testing.T) {
-	gp := time.Duration(10 * time.Minute)
-	cm := NewConnManager(1, 5, gp)
+	const gp = 10 * time.Minute
+	cm, err := NewConnManager(1, 5, gp)
+	require.NoError(t, err)
 	defer cm.Close()
 	not := cm.Notifee()
 	conn := randConn(t, nil)
@@ -366,8 +382,9 @@ func TestDoubleConnection(t *testing.T) {
 }
 
 func TestDisconnected(t *testing.T) {
-	gp := time.Duration(10 * time.Minute)
-	cm := NewConnManager(1, 5, gp)
+	const gp = 10 * time.Minute
+	cm, err := NewConnManager(1, 5, gp)
+	require.NoError(t, err)
 	defer cm.Close()
 	not := cm.Notifee()
 	conn := randConn(t, nil)
@@ -405,7 +422,8 @@ func TestGracePeriod(t *testing.T) {
 	}
 
 	SilencePeriod = 0
-	cm := NewConnManager(10, 20, 100*time.Millisecond)
+	cm, err := NewConnManager(10, 20, 100*time.Millisecond)
+	require.NoError(t, err)
 	defer cm.Close()
 	SilencePeriod = 10 * time.Second
 
@@ -463,7 +481,8 @@ func TestQuickBurstRespectsSilencePeriod(t *testing.T) {
 		t.Skip("race detector is unhappy with this test")
 	}
 
-	cm := NewConnManager(10, 20, 0)
+	cm, err := NewConnManager(10, 20, 0)
+	require.NoError(t, err)
 	defer cm.Close()
 	not := cm.Notifee()
 
@@ -500,7 +519,8 @@ func TestPeerProtectionSingleTag(t *testing.T) {
 	}
 
 	SilencePeriod = 0
-	cm := NewConnManager(19, 20, 0)
+	cm, err := NewConnManager(19, 20, 0)
+	require.NoError(t, err)
 	defer cm.Close()
 	SilencePeriod = 10 * time.Second
 
@@ -588,7 +608,8 @@ func TestPeerProtectionMultipleTags(t *testing.T) {
 	}
 
 	SilencePeriod = 0
-	cm := NewConnManager(19, 20, 0)
+	cm, err := NewConnManager(19, 20, 0)
+	require.NoError(t, err)
 	defer cm.Close()
 	SilencePeriod = 10 * time.Second
 
@@ -672,7 +693,8 @@ func TestPeerProtectionMultipleTags(t *testing.T) {
 
 func TestPeerProtectionIdempotent(t *testing.T) {
 	SilencePeriod = 0
-	cm := NewConnManager(10, 20, 0)
+	cm, err := NewConnManager(10, 20, 0)
+	require.NoError(t, err)
 	defer cm.Close()
 	SilencePeriod = 10 * time.Second
 
@@ -704,9 +726,9 @@ func TestPeerProtectionIdempotent(t *testing.T) {
 }
 
 func TestUpsertTag(t *testing.T) {
-	cm := NewConnManager(1, 1, time.Duration(10*time.Minute))
+	cm, err := NewConnManager(1, 1, time.Duration(10*time.Minute))
+	require.NoError(t, err)
 	defer cm.Close()
-
 	not := cm.Notifee()
 	conn := randConn(t, nil)
 	rp := conn.RemotePeer()
@@ -741,7 +763,8 @@ func TestUpsertTag(t *testing.T) {
 }
 
 func TestTemporaryEntriesClearedFirst(t *testing.T) {
-	cm := NewConnManager(1, 1, 0)
+	cm, err := NewConnManager(1, 1, 0)
+	require.NoError(t, err)
 
 	id := tu.RandPeerIDFatal(t)
 	cm.TagPeer(id, "test", 20)
@@ -762,7 +785,8 @@ func TestTemporaryEntriesClearedFirst(t *testing.T) {
 }
 
 func TestTemporaryEntryConvertedOnConnection(t *testing.T) {
-	cm := NewConnManager(1, 1, 0)
+	cm, err := NewConnManager(1, 1, 0)
+	require.NoError(t, err)
 	defer cm.Close()
 
 	conn := randConn(t, nil)
@@ -789,7 +813,8 @@ func TestConcurrentCleanupAndTagging(t *testing.T) {
 	minCleanupInterval = time.Millisecond
 
 	SilencePeriod = 0
-	cm := NewConnManager(1, 1, 0)
+	cm, err := NewConnManager(1, 1, 0)
+	require.NoError(t, err)
 	defer cm.Close()
 	SilencePeriod = 10 * time.Second
 

@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/libp2p/go-libp2p-core/network"
+
+	"github.com/stretchr/testify/require"
 )
 
 func randomConns(tb testing.TB) (c [5000]network.Conn) {
@@ -17,7 +19,8 @@ func randomConns(tb testing.TB) (c [5000]network.Conn) {
 
 func BenchmarkLockContention(b *testing.B) {
 	conns := randomConns(b)
-	cm := NewConnManager(1000, 1000, 0)
+	cm, err := NewConnManager(1000, 1000, 0)
+	require.NoError(b, err)
 	not := cm.Notifee()
 
 	kill := make(chan struct{})
