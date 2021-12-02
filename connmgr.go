@@ -15,10 +15,6 @@ import (
 	ma "github.com/multiformats/go-multiaddr"
 )
 
-var SilencePeriod = 10 * time.Second
-
-var minCleanupInterval = 10 * time.Second
-
 var log = logging.Logger("connmgr")
 
 // BasicConnMgr is a ConnManager that trims connections whenever the count exceeds the
@@ -94,17 +90,15 @@ func (s *segment) tagInfoFor(p peer.ID) *peerInfo {
 }
 
 // NewConnManager creates a new BasicConnMgr with the provided params:
-// * lo and hi are watermarks governing the number of connections that'll be maintained.
-//   When the peer count exceeds the 'high watermark', as many peers will be pruned (and
-//   their connections terminated) until 'low watermark' peers remain.
-// * grace is the amount of time a newly opened connection is given before it becomes
-//   subject to pruning.
-func NewConnManager(low, hi int, grace time.Duration, opts ...Option) (*BasicConnMgr, error) {
+// lo and hi are watermarks governing the number of connections that'll be maintained.
+// When the peer count exceeds the 'high watermark', as many peers will be pruned (and
+// their connections terminated) until 'low watermark' peers remain.
+func NewConnManager(low, hi int, opts ...Option) (*BasicConnMgr, error) {
 	cfg := &config{
 		highWater:     hi,
 		lowWater:      low,
-		gracePeriod:   grace,
-		silencePeriod: SilencePeriod,
+		gracePeriod:   time.Minute,
+		silencePeriod: 10 * time.Second,
 	}
 	for _, o := range opts {
 		if err := o(cfg); err != nil {
@@ -242,11 +236,8 @@ func (cm *BasicConnMgr) background() {
 	defer cm.refCount.Done()
 
 	interval := cm.cfg.gracePeriod / 2
-	if interval < cm.cfg.silencePeriod {
+	if cm.cfg.silencePeriod != 0 {
 		interval = cm.cfg.silencePeriod
-	}
-	if interval < minCleanupInterval {
-		interval = minCleanupInterval
 	}
 
 	ticker := time.NewTicker(interval)

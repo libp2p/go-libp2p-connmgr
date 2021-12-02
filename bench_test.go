@@ -19,7 +19,7 @@ func randomConns(tb testing.TB) (c [5000]network.Conn) {
 
 func BenchmarkLockContention(b *testing.B) {
 	conns := randomConns(b)
-	cm, err := NewConnManager(1000, 1000, 0)
+	cm, err := NewConnManager(1000, 1000, WithGracePeriod(0))
 	require.NoError(b, err)
 	not := cm.Notifee()
 
