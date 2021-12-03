@@ -82,26 +82,6 @@ func TestTrimBlocks(t *testing.T) {
 	<-doneCh
 }
 
-// Make sure we return from trim when the context is canceled.
-func TestTrimCancels(t *testing.T) {
-	cm, err := NewConnManager(200, 300, WithGracePeriod(0))
-	require.NoError(t, err)
-	defer cm.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-
-	cm.lastTrimMu.RLock()
-	defer cm.lastTrimMu.RUnlock()
-
-	doneCh := make(chan struct{})
-	go func() {
-		defer close(doneCh)
-		cm.TrimOpenConns(ctx)
-	}()
-	time.Sleep(time.Millisecond)
-	cancel()
-	<-doneCh
-}
-
 // Make sure trim returns when closed.
 func TestTrimClosed(t *testing.T) {
 	cm, err := NewConnManager(200, 300, WithGracePeriod(0))
