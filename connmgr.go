@@ -35,9 +35,11 @@ type BasicConnMgr struct {
 	protected map[peer.ID]map[string]struct{}
 
 	// channel-based semaphore that enforces only a single trim is in progress
-	trimRunningCh chan struct{}
-	trimTrigger   chan chan<- struct{}
-	connCount     int32
+	trimMutex sync.Mutex
+	connCount int32
+	// to be accessed atomically. This is mimicking the implementation of a sync.Once.
+	// Take care of correct alignment when modifying this struct.
+	trimCount uint64
 
 	lastTrimMu sync.RWMutex
 	lastTrim   time.Time
@@ -114,10 +116,8 @@ func NewConnManager(low, hi int, opts ...Option) (*BasicConnMgr, error) {
 	}
 
 	cm := &BasicConnMgr{
-		cfg:           cfg,
-		trimRunningCh: make(chan struct{}, 1),
-		trimTrigger:   make(chan chan<- struct{}),
-		protected:     make(map[peer.ID]map[string]struct{}, 16),
+		cfg:       cfg,
+		protected: make(map[peer.ID]map[string]struct{}, 16),
 		segments: func() (ret segments) {
 			for i := range ret {
 				ret[i] = &segment{
@@ -147,17 +147,10 @@ func NewConnManager(low, hi int, opts ...Option) (*BasicConnMgr, error) {
 func (cm *BasicConnMgr) memoryEmergency() {
 	log.Info("Low on memory. Closing half of our connections.")
 	target := int(atomic.LoadInt32(&cm.connCount) / 2)
-	ch := make(chan struct{})
-	select {
-	case cm.trimTrigger <- ch:
-	case <-cm.ctx.Done():
-	}
 
-	// Wait for the trim.
-	select {
-	case <-ch:
-	case <-cm.ctx.Done():
-	}
+	cm.trimMutex.Lock()
+	defer atomic.AddUint64(&cm.trimCount, 1)
+	defer cm.trimMutex.Unlock()
 
 	// Trim connections without paying attention to the silence period.
 	for _, c := range cm.getConnsToCloseEmergency(target) {
@@ -261,26 +254,11 @@ func (p peerInfos) SortByValue() {
 // This function blocks until a trim is completed. If a trim is underway, a new
 // one won't be started, and instead it'll wait until that one is completed before
 // returning.
-func (cm *BasicConnMgr) TrimOpenConns(ctx context.Context) {
+func (cm *BasicConnMgr) TrimOpenConns(_ context.Context) {
 	// TODO: error return value so we can cleanly signal we are aborting because:
 	// (a) there's another trim in progress, or (b) the silence period is in effect.
 
-	// Trigger a trim.
-	ch := make(chan struct{})
-	select {
-	case cm.trimTrigger <- ch:
-	case <-cm.ctx.Done():
-	case <-ctx.Done():
-		// TODO: return an error?
-	}
-
-	// Wait for the trim.
-	select {
-	case <-ch:
-	case <-cm.ctx.Done():
-	case <-ctx.Done():
-		// TODO: return an error?
-	}
+	cm.doTrim()
 }
 
 func (cm *BasicConnMgr) background() {
@@ -295,35 +273,30 @@ func (cm *BasicConnMgr) background() {
 	defer ticker.Stop()
 
 	for {
-		var waiting chan<- struct{}
 		select {
 		case <-ticker.C:
 			if atomic.LoadInt32(&cm.connCount) < int32(cm.cfg.highWater) {
 				// Below high water, skip.
 				continue
 			}
-		case waiting = <-cm.trimTrigger:
 		case <-cm.ctx.Done():
 			return
 		}
 		cm.trim()
+	}
+}
 
-		// Notify anyone waiting on this trim.
-		if waiting != nil {
-			close(waiting)
-		}
-
-		for {
-			select {
-			case waiting = <-cm.trimTrigger:
-				if waiting != nil {
-					close(waiting)
-				}
-				continue
-			default:
-			}
-			break
-		}
+func (cm *BasicConnMgr) doTrim() {
+	// This logic is mimicking the implementation of sync.Once in the standard library.
+	count := atomic.LoadUint64(&cm.trimCount)
+	cm.trimMutex.Lock()
+	defer cm.trimMutex.Unlock()
+	if count == atomic.LoadUint64(&cm.trimCount) {
+		cm.trim()
+		cm.lastTrimMu.Lock()
+		cm.lastTrim = time.Now()
+		cm.lastTrimMu.Unlock()
+		atomic.AddUint64(&cm.trimCount, 1)
 	}
 }
 
@@ -334,16 +307,10 @@ func (cm *BasicConnMgr) trim() {
 		log.Infow("closing conn", "peer", c.RemotePeer())
 		c.Close()
 	}
-
-	// finally, update the last trim time.
-	cm.lastTrimMu.Lock()
-	cm.lastTrim = time.Now()
-	cm.lastTrimMu.Unlock()
 }
 
 func (cm *BasicConnMgr) getConnsToCloseEmergency(target int) []network.Conn {
-	npeers := cm.segments.countPeers()
-	candidates := make(peerInfos, 0, npeers)
+	candidates := make(peerInfos, 0, cm.segments.countPeers())
 
 	cm.plk.RLock()
 	for _, s := range cm.segments {
