@@ -246,6 +246,38 @@ func (p peerInfos) SortByValue() {
 	})
 }
 
+func (p peerInfos) SortByValueAndStreams() {
+	sort.Slice(p, func(i, j int) bool {
+		left, right := p[i], p[j]
+		// temporary peers are preferred for pruning.
+		if left.temp != right.temp {
+			return left.temp
+		}
+		// otherwise, compare by value.
+		if left.value != right.value {
+			return left.value < right.value
+		}
+		incomingAndStreams := func(m map[network.Conn]time.Time) (incoming bool, numStreams int) {
+			for c := range m {
+				stat := c.Stat()
+				if stat.Direction == network.DirInbound {
+					incoming = true
+				}
+				numStreams += stat.NumStreams
+			}
+			return
+		}
+		leftIncoming, leftStreams := incomingAndStreams(left.conns)
+		rightIncoming, rightStreams := incomingAndStreams(right.conns)
+		// incoming connections are preferred for pruning
+		if leftIncoming != rightIncoming {
+			return leftIncoming
+		}
+		// prune connections with a higher number of streams first
+		return rightStreams < leftStreams
+	})
+}
+
 // TrimOpenConns closes the connections of as many peers as needed to make the peer count
 // equal the low watermark. Peers are sorted in ascending order based on their total value,
 // pruning those peers with the lowest scores first, as long as they are not within their
@@ -327,7 +359,7 @@ func (cm *BasicConnMgr) getConnsToCloseEmergency(target int) []network.Conn {
 	cm.plk.RUnlock()
 
 	// Sort peers according to their value.
-	candidates.SortByValue()
+	candidates.SortByValueAndStreams()
 
 	selected := make([]network.Conn, 0, target+10)
 	for _, inf := range candidates {
@@ -357,7 +389,7 @@ func (cm *BasicConnMgr) getConnsToCloseEmergency(target int) []network.Conn {
 	}
 	cm.plk.RUnlock()
 
-	candidates.SortByValue()
+	candidates.SortByValueAndStreams()
 	for _, inf := range candidates {
 		if target <= 0 {
 			break
