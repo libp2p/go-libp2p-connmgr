@@ -141,12 +141,18 @@ func NewConnManager(low, hi int, opts ...Option) (*BasicConnMgr, error) {
 }
 
 // memoryEmergency is run when we run low on memory.
-// Close half of the connections, as quickly as possible.
+// Close connections until we right the low watermark.
 // We don't pay attention to the silence period or the grace period.
 // We try to not kill protected connections, but if that turns out to be necessary, not connection is safe!
 func (cm *BasicConnMgr) memoryEmergency() {
-	log.Info("Low on memory. Closing half of our connections.")
-	target := int(atomic.LoadInt32(&cm.connCount) / 2)
+	connCount := int(atomic.LoadInt32(&cm.connCount))
+	target := connCount - cm.cfg.lowWater
+	if target < 0 {
+		log.Warnw("Low on memory, but we only have a few connections", "num", connCount, "low watermark", cm.cfg.lowWater)
+		return
+	} else {
+		log.Warnf("Low on memory. Closing %d connections.", target)
+	}
 
 	cm.trimMutex.Lock()
 	defer atomic.AddUint64(&cm.trimCount, 1)
