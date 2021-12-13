@@ -2,6 +2,7 @@ package connmgr
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -147,6 +148,7 @@ func NewConnManager(low, hi int, opts ...Option) (*BasicConnMgr, error) {
 func (cm *BasicConnMgr) memoryEmergency() {
 	connCount := int(atomic.LoadInt32(&cm.connCount))
 	target := connCount - cm.cfg.lowWater
+	fmt.Println("memory emergency. Killing connections:", target)
 	if target < 0 {
 		log.Warnw("Low on memory, but we only have a few connections", "num", connCount, "low watermark", cm.cfg.lowWater)
 		return
