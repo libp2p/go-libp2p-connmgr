@@ -422,7 +422,7 @@ func TestDisconnected(t *testing.T) {
 
 func TestGracePeriod(t *testing.T) {
 	const gp = 100 * time.Millisecond
-	cm, err := NewConnManager(10, 20, WithGracePeriod(gp), WithSilencePeriod(time.Millisecond))
+	cm, err := NewConnManager(10, 20, WithGracePeriod(gp), WithSilencePeriod(time.Hour))
 	require.NoError(t, err)
 	defer cm.Close()
 
@@ -509,7 +509,7 @@ func TestQuickBurstRespectsSilencePeriod(t *testing.T) {
 }
 
 func TestPeerProtectionSingleTag(t *testing.T) {
-	cm, err := NewConnManager(19, 20, WithGracePeriod(0), WithSilencePeriod(time.Millisecond))
+	cm, err := NewConnManager(19, 20, WithGracePeriod(0), WithSilencePeriod(time.Hour))
 	require.NoError(t, err)
 	defer cm.Close()
 	not := cm.Notifee()
@@ -592,7 +592,7 @@ func TestPeerProtectionSingleTag(t *testing.T) {
 }
 
 func TestPeerProtectionMultipleTags(t *testing.T) {
-	cm, err := NewConnManager(19, 20, WithGracePeriod(0), WithSilencePeriod(time.Millisecond))
+	cm, err := NewConnManager(19, 20, WithGracePeriod(0), WithSilencePeriod(time.Hour))
 	require.NoError(t, err)
 	defer cm.Close()
 	not := cm.Notifee()
@@ -674,7 +674,7 @@ func TestPeerProtectionMultipleTags(t *testing.T) {
 }
 
 func TestPeerProtectionIdempotent(t *testing.T) {
-	cm, err := NewConnManager(10, 20, WithGracePeriod(0), WithSilencePeriod(time.Millisecond))
+	cm, err := NewConnManager(10, 20, WithGracePeriod(0), WithSilencePeriod(time.Hour))
 	require.NoError(t, err)
 	defer cm.Close()
 
