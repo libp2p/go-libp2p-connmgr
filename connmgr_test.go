@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libp2p/go-libp2p-core/crypto"
+
 	"github.com/libp2p/go-libp2p-core/network"
 	"github.com/libp2p/go-libp2p-core/peer"
 
@@ -79,26 +81,6 @@ func TestTrimBlocks(t *testing.T) {
 		cm.lastTrimMu.RUnlock()
 	}
 	<-doneCh
-	<-doneCh
-}
-
-// Make sure we return from trim when the context is canceled.
-func TestTrimCancels(t *testing.T) {
-	cm, err := NewConnManager(200, 300, WithGracePeriod(0))
-	require.NoError(t, err)
-	defer cm.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-
-	cm.lastTrimMu.RLock()
-	defer cm.lastTrimMu.RUnlock()
-
-	doneCh := make(chan struct{})
-	go func() {
-		defer close(doneCh)
-		cm.TrimOpenConns(ctx)
-	}()
-	time.Sleep(time.Millisecond)
-	cancel()
 	<-doneCh
 }
 
@@ -796,4 +778,80 @@ func TestConcurrentCleanupAndTagging(t *testing.T) {
 		conn := randConn(t, nil)
 		cm.TagPeer(conn.RemotePeer(), "test", 20)
 	}
+}
+
+type mockConn struct {
+	stats network.ConnStats
+}
+
+func (m mockConn) Close() error                                          { panic("implement me") }
+func (m mockConn) LocalPeer() peer.ID                                    { panic("implement me") }
+func (m mockConn) LocalPrivateKey() crypto.PrivKey                       { panic("implement me") }
+func (m mockConn) RemotePeer() peer.ID                                   { panic("implement me") }
+func (m mockConn) RemotePublicKey() crypto.PubKey                        { panic("implement me") }
+func (m mockConn) LocalMultiaddr() ma.Multiaddr                          { panic("implement me") }
+func (m mockConn) RemoteMultiaddr() ma.Multiaddr                         { panic("implement me") }
+func (m mockConn) Stat() network.ConnStats                               { return m.stats }
+func (m mockConn) ID() string                                            { panic("implement me") }
+func (m mockConn) NewStream(ctx context.Context) (network.Stream, error) { panic("implement me") }
+func (m mockConn) GetStreams() []network.Stream                          { panic("implement me") }
+
+func TestPeerInfoSorting(t *testing.T) {
+	t.Run("starts with temporary connections", func(t *testing.T) {
+		p1 := peerInfo{id: peer.ID("peer1")}
+		p2 := peerInfo{id: peer.ID("peer2"), temp: true}
+		pis := peerInfos{p1, p2}
+		pis.SortByValue()
+		require.Equal(t, pis, peerInfos{p2, p1})
+	})
+
+	t.Run("starts with low-value connections", func(t *testing.T) {
+		p1 := peerInfo{id: peer.ID("peer1"), value: 40}
+		p2 := peerInfo{id: peer.ID("peer2"), value: 20}
+		pis := peerInfos{p1, p2}
+		pis.SortByValue()
+		require.Equal(t, pis, peerInfos{p2, p1})
+	})
+
+	t.Run("in a memory emergency, starts with incoming connections", func(t *testing.T) {
+		incoming := network.ConnStats{}
+		incoming.Direction = network.DirInbound
+		outgoing := network.ConnStats{}
+		outgoing.Direction = network.DirOutbound
+		p1 := peerInfo{
+			id: peer.ID("peer1"),
+			conns: map[network.Conn]time.Time{
+				&mockConn{stats: outgoing}: time.Now(),
+			},
+		}
+		p2 := peerInfo{
+			id: peer.ID("peer2"),
+			conns: map[network.Conn]time.Time{
+				&mockConn{stats: outgoing}: time.Now(),
+				&mockConn{stats: incoming}: time.Now(),
+			},
+		}
+		pis := peerInfos{p1, p2}
+		pis.SortByValueAndStreams()
+		require.Equal(t, pis, peerInfos{p2, p1})
+	})
+
+	t.Run("in a memory emergency, starts with connections that have many streams", func(t *testing.T) {
+		p1 := peerInfo{
+			id: peer.ID("peer1"),
+			conns: map[network.Conn]time.Time{
+				&mockConn{stats: network.ConnStats{NumStreams: 100}}: time.Now(),
+			},
+		}
+		p2 := peerInfo{
+			id: peer.ID("peer2"),
+			conns: map[network.Conn]time.Time{
+				&mockConn{stats: network.ConnStats{NumStreams: 80}}: time.Now(),
+				&mockConn{stats: network.ConnStats{NumStreams: 40}}: time.Now(),
+			},
+		}
+		pis := peerInfos{p1, p2}
+		pis.SortByValueAndStreams()
+		require.Equal(t, pis, peerInfos{p2, p1})
+	})
 }
