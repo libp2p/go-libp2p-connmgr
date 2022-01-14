@@ -129,8 +129,12 @@ func NewConnManager(low, hi int, opts ...Option) (*BasicConnMgr, error) {
 	}
 	cm.ctx, cm.cancel = context.WithCancel(context.Background())
 
-	// When we're running low on memory, immediately trigger a trim.
-	cm.unregisterWatchdog = watchdog.RegisterPostGCNotifee(cm.memoryEmergency)
+	if cfg.emergencyTrim {
+		// When we're running low on memory, immediately trigger a trim.
+		cm.unregisterWatchdog = watchdog.RegisterPostGCNotifee(cm.memoryEmergency)
+	} else {
+		cm.unregisterWatchdog = func() {}
+	}
 
 	decay, _ := NewDecayer(cfg.decayer, cm)
 	cm.decayer = decay

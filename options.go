@@ -12,6 +12,7 @@ type config struct {
 	gracePeriod   time.Duration
 	silencePeriod time.Duration
 	decayer       *DecayerCfg
+	emergencyTrim bool
 }
 
 // Option represents an option for the basic connection manager.
@@ -47,6 +48,14 @@ func WithSilencePeriod(p time.Duration) Option {
 			return errors.New("silence period must be non-zero")
 		}
 		cfg.silencePeriod = p
+		return nil
+	}
+}
+
+// WithEmergencyTrim is an option to enable trimming connections on memory emergency.
+func WithEmergencyTrim(enable bool) Option {
+	return func(cfg *config) error {
+		cfg.emergencyTrim = enable
 		return nil
 	}
 }
