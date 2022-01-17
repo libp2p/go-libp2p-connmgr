@@ -13,7 +13,6 @@ import (
 
 	logging "github.com/ipfs/go-log/v2"
 	ma "github.com/multiformats/go-multiaddr"
-	"github.com/raulk/go-watchdog"
 )
 
 var log = logging.Logger("connmgr")
@@ -44,10 +43,10 @@ type BasicConnMgr struct {
 	lastTrimMu sync.RWMutex
 	lastTrim   time.Time
 
-	refCount           sync.WaitGroup
-	ctx                context.Context
-	cancel             func()
-	unregisterWatchdog func()
+	refCount                sync.WaitGroup
+	ctx                     context.Context
+	cancel                  func()
+	unregisterMemoryWatcher func()
 }
 
 var (
@@ -131,9 +130,7 @@ func NewConnManager(low, hi int, opts ...Option) (*BasicConnMgr, error) {
 
 	if cfg.emergencyTrim {
 		// When we're running low on memory, immediately trigger a trim.
-		cm.unregisterWatchdog = watchdog.RegisterPostGCNotifee(cm.memoryEmergency)
-	} else {
-		cm.unregisterWatchdog = func() {}
+		cm.unregisterMemoryWatcher = registerWatchdog(cm.memoryEmergency)
 	}
 
 	decay, _ := NewDecayer(cfg.decayer, cm)
@@ -176,7 +173,9 @@ func (cm *BasicConnMgr) memoryEmergency() {
 
 func (cm *BasicConnMgr) Close() error {
 	cm.cancel()
-	cm.unregisterWatchdog()
+	if cm.unregisterMemoryWatcher != nil {
+		cm.unregisterMemoryWatcher()
+	}
 	if err := cm.decayer.Close(); err != nil {
 		return err
 	}
