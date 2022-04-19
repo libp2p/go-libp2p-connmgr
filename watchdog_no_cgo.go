@@ -3,14 +3,12 @@
 
 package connmgr
 
-func registerWatchdog(func()) (unregister func()) {
-	return nil
-}
+import (
+	lconnmgr "github.com/libp2p/go-libp2p/p2p/net/connmgr"
+)
 
 // WithEmergencyTrim is an option to enable trimming connections on memory emergency.
+// Deprecated: use go-libp2p/p2p/net/connmgr.WithEmergencyTrim instead.
 func WithEmergencyTrim(enable bool) Option {
-	return func(cfg *config) error {
-		log.Warn("platform doesn't support go-watchdog")
-		return nil
-	}
+	return lconnmgr.WithEmergencyTrim(enable)
 }
