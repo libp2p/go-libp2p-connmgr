@@ -1,53 +1,33 @@
 package connmgr
 
 import (
-	"errors"
 	"time"
+
+	lconnmgr "github.com/libp2p/go-libp2p/p2p/net/connmgr"
 )
 
-// config is the configuration struct for the basic connection manager.
-type config struct {
-	highWater     int
-	lowWater      int
-	gracePeriod   time.Duration
-	silencePeriod time.Duration
-	decayer       *DecayerCfg
-	emergencyTrim bool
-}
-
 // Option represents an option for the basic connection manager.
-type Option func(*config) error
+// Deprecated: use go-libp2p/p2p/net/connmgr.Option instead.
+type Option = lconnmgr.Option
 
 // DecayerConfig applies a configuration for the decayer.
+// Deprecated: use go-libp2p/p2p/net/connmgr.DecayerConfig instead.
 func DecayerConfig(opts *DecayerCfg) Option {
-	return func(cfg *config) error {
-		cfg.decayer = opts
-		return nil
-	}
+	return lconnmgr.DecayerConfig(opts)
 }
 
 // WithGracePeriod sets the grace period.
 // The grace period is the time a newly opened connection is given before it becomes
 // subject to pruning.
+// Deprecated: use go-libp2p/p2p/net/connmgr.WithGracePeriod instead.
 func WithGracePeriod(p time.Duration) Option {
-	return func(cfg *config) error {
-		if p < 0 {
-			return errors.New("grace period must be non-negative")
-		}
-		cfg.gracePeriod = p
-		return nil
-	}
+	return lconnmgr.WithGracePeriod(p)
 }
 
 // WithSilencePeriod sets the silence period.
 // The connection manager will perform a cleanup once per silence period
 // if the number of connections surpasses the high watermark.
+// Deprecated: use go-libp2p/p2p/net/connmgr.WithSilencePeriod instead.
 func WithSilencePeriod(p time.Duration) Option {
-	return func(cfg *config) error {
-		if p <= 0 {
-			return errors.New("silence period must be non-zero")
-		}
-		cfg.silencePeriod = p
-		return nil
-	}
+	return lconnmgr.WithSilencePeriod(p)
 }

@@ -1,4 +1,8 @@
-go-libp2p-connmgr
+# DEPRECATION NOTICE
+This package has moved into go-libp2p as a sub-package, `github.com/libp2p/go-libp2p/p2p/net/connmgr`.
+
+
+# go-libp2p-connmgr
 ==================
 
 [![](https://img.shields.io/badge/made%20by-Protocol%20Labs-blue.svg?style=flat-square)](http://ipn.io)
